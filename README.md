@@ -15,7 +15,7 @@ It does **not** handle rasterization. It will only help you know which glyphs to
 ```c
 static kbts_font GlobalFont;
 
-void RenderGlyph(kbts_glyph *Glyph, int X, int Y);
+void RenderGlyph(kbts_glyph *Glyph, int X, int Y); // Yours to implement
 
 void ShapeText(kbts_cursor *Cursor, uint32_t *Codepoints, size_t CodepointCount, kbts_direction MainDirection, kbts_direction Direction, kbts_script Script)
 {
