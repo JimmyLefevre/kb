@@ -73,6 +73,7 @@ void SegmentText(uint32_t *Codepoints, size_t CodepointCount)
       if(Break.Flags & KBTS_BREAK_FLAG_DIRECTION)
       {
         Direction = Break.Direction;
+        if(!Cursor.Direction) Cursor = kbts_Cursor(BreakState.MainDirection);
       }
       if(Break.Flags & KBTS_BREAK_FLAG_SCRIPT)
       {
