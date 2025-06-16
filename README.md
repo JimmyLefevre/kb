@@ -8,6 +8,12 @@
 
 ## kb_text_shape.h
 
+![Example of Arabic shaping with stb_truetype](./images/arabic.png)
+![Example of Hindi shaping with stb_truetype](./images/hindi.png)
+![Example of Khmer shaping with stb_truetype](./images/khmer.png)
+![Example of Myanmar shaping with stb_truetype](./images/myanmar.png)
+![Example of Gunjala Gondi shaping with stb_truetype](./images/gunjala_gondi.png)
+
 [kb\_text\_shape.h](./kb_text_shape.h) provides ICU-like text segmentation (i.e. breaking Unicode text by direction, line, word and grapheme). It also provides Harfbuzz-like text shaping for OpenType fonts, which means it is capable of handling complex script layout and ligatures, among other things.
 
 It does **not** handle rasterization. It will only help you know which glyphs to display where!
