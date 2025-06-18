@@ -20747,7 +20747,7 @@ KBTS_EXPORT int kbts_ReadFontData(kbts_font *Font, void *Scratch, kbts_un Scratc
 
 KBTS_EXPORT int kbts_PostReadFontInitialize(kbts_font *Font, void *Memory, kbts_un MemorySize)
 {
-  if(Font->Maxp)
+  if(kbts_FontIsValid(Font) && Font->Maxp)
   {
     // Bake table filters.
     kbts_un GlyphCount = Font->GlyphCount;
