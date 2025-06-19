@@ -145,11 +145,16 @@
      Open a font with your own memory:
        kbts_font Font;
        size_t ScratchSize = kbts_ReadFontHeader(&Font, Data, Size);
-       int Error = kbts_ReadFontData(&Font, malloc(ScratchSize), ScratchSize);
-       // At this point, Error will most likely be 0. We may still fail to parse some technically valid
-       // fonts that contain very deeply-nested or self-referential lookups.
-       // In this case, Harfbuzz might open the font, but at the time of writing, it silently limits the
-       // recursion depth to 64 anyway.
+       size_t PermanentMemorySize = kbts_ReadFontData(&Font, malloc(ScratchSize), ScratchSize);
+       kbts_PostReadFontInitialize(&Font, malloc(PermanentMemorySize), PermanentMemorySize);
+       // At any point, you can call kbts_FontIsValid(&Font) to check if the read went well.
+       // You do not need to check for font validity in between API calls here; once a font is flagged
+       // with an error, subsequent API calls simply do nothing.
+       // If you have provided real font data, kbts_FontIsValid(&Font) will most likely be true.
+       // We may still fail to parse some technically valid fonts that contain very deeply-nested or
+       // self-referential lookups.
+       // In those cases, Harfbuzz might open the font, but, at the time of writing, it silently limits
+       // the recursion depth to 64 when applying the lookups anyway.
 
      Allocate a shape_state with your own memory:
        kbts_shape_state *State = kbts_PlaceShapeState(malloc(kbts_SizeOfShapeState(Font)), kbts_SizeOfShapeState(Font));
@@ -2128,7 +2133,7 @@ KBTS_EXPORT void kbts_FreeShapeState(kbts_shape_state *State);
 #endif
 KBTS_EXPORT int kbts_FontIsValid(kbts_font *Font);
 KBTS_EXPORT kbts_un kbts_ReadFontHeader(kbts_font *Font, void *Data, kbts_un Size);
-KBTS_EXPORT int kbts_ReadFontData(kbts_font *Font, void *Scratch, kbts_un ScratchSize);
+KBTS_EXPORT kbts_un kbts_ReadFontData(kbts_font *Font, void *Scratch, kbts_un ScratchSize);
 KBTS_EXPORT int kbts_PostReadFontInitialize(kbts_font *Font, void *Memory, kbts_un MemorySize);
 KBTS_EXPORT kbts_un kbts_SizeOfShapeState(kbts_font *Font);
 KBTS_EXPORT kbts_shape_state *kbts_PlaceShapeState(void *Address, kbts_un Size);
@@ -20333,7 +20338,7 @@ KBTS_EXPORT kbts_un kbts_ReadFontHeader(kbts_font *Font, void *Data, kbts_un Siz
   return (kbts_u32)Result;
 }
 
-KBTS_EXPORT int kbts_ReadFontData(kbts_font *Font, void *Scratch, kbts_un ScratchSize)
+KBTS_EXPORT kbts_un kbts_ReadFontData(kbts_font *Font, void *Scratch, kbts_un ScratchSize)
 {
   kbts_byteswap_context ByteSwapContext = KBTS_ZERO;
   ByteSwapContext.FileBase = Font->FileBase;
@@ -20742,7 +20747,7 @@ KBTS_EXPORT int kbts_ReadFontData(kbts_font *Font, void *Scratch, kbts_un Scratc
   kbts_un GlyphLookupMatrixSizeInBytes = ((((TotalLookupCount * Font->GlyphCount) + 7) / 8) + 3) & ~3;
   kbts_un GlyphLookupSubtableMatrixSizeInBytes = ((((TotalSubtableCount * Font->GlyphCount) + 7) / 8) + 3) & ~3;
   kbts_un Result = GlyphLookupMatrixSizeInBytes + GlyphLookupSubtableMatrixSizeInBytes + sizeof(kbts_u32) * TotalLookupCount + sizeof(kbts_lookup_subtable_info) * TotalSubtableCount;
-  return (kbts_u32)Result;
+  return Result;
 }
 
 KBTS_EXPORT int kbts_PostReadFontInitialize(kbts_font *Font, void *Memory, kbts_un MemorySize)
