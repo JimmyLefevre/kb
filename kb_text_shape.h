@@ -1818,7 +1818,7 @@ typedef struct kbts_glyph_classes
 typedef struct kbts_glyph
 {
   kbts_u32 Codepoint;
-  kbts_u16 Id;
+  kbts_u16 Id; // Glyph index. This is what you want to use to query outline data.
   kbts_u16 Uid;
   kbts_glyph_classes Classes;
 
@@ -1826,6 +1826,9 @@ typedef struct kbts_glyph
 
   kbts_glyph_flags Flags;
 
+  // These fields are the glyph's final positioning data.
+  // For normal usage, you should not have to use these directly yourself.
+  // In case you are curious or have a specific need, see kbts_PositionGlyph() to see how these are used.
   kbts_s32 OffsetX;
   kbts_s32 OffsetY;
   kbts_s32 AdvanceX;
@@ -2138,8 +2141,8 @@ KBTS_EXPORT int kbts_PostReadFontInitialize(kbts_font *Font, void *Memory, kbts_
 KBTS_EXPORT kbts_un kbts_SizeOfShapeState(kbts_font *Font);
 KBTS_EXPORT kbts_shape_state *kbts_PlaceShapeState(void *Address, kbts_un Size);
 KBTS_EXPORT void kbts_ResetShapeState(kbts_shape_state *State);
-KBTS_EXPORT kbts_shape_config kbts_ShapeConfig(kbts_font *Font, kbts_u32 Script, kbts_u32 Language);
-KBTS_EXPORT kbts_u32 kbts_ShaperIsComplex(kbts_shaper Shaper);
+KBTS_EXPORT kbts_shape_config kbts_ShapeConfig(kbts_font *Font, kbts_script Script, kbts_language Language);
+KBTS_EXPORT int kbts_ShaperIsComplex(kbts_shaper Shaper);
 KBTS_EXPORT int kbts_Shape(kbts_shape_state *State, kbts_shape_config *Config, kbts_direction MainDirection, kbts_direction RunDirection, kbts_glyph *Glyphs, kbts_u32 *GlyphCount, kbts_u32 GlyphCapacity);
 KBTS_EXPORT kbts_cursor kbts_Cursor(kbts_direction Direction);
 KBTS_EXPORT void kbts_PositionGlyph(kbts_cursor *Cursor, kbts_glyph *Glyph, kbts_s32 *X, kbts_s32 *Y);
@@ -2148,11 +2151,10 @@ KBTS_EXPORT int kbts_BreakStateIsValid(kbts_break_state *State);
 KBTS_EXPORT void kbts_BreakAddCodepoint(kbts_break_state *State, kbts_u32 Codepoint, kbts_u32 PositionIncrement, int EndOfText);
 KBTS_EXPORT void kbts_BreakFlush(kbts_break_state *State);
 KBTS_EXPORT int kbts_Break(kbts_break_state *State, kbts_break *Break);
-KBTS_EXPORT kbts_decode kbts_DecodeUtf8(const char *Utf8, size_t Length);
+KBTS_EXPORT kbts_decode kbts_DecodeUtf8(const char *Utf8, kbts_un Length);
 KBTS_EXPORT kbts_glyph kbts_CodepointToGlyph(kbts_font *Font, kbts_u32 Codepoint);
 KBTS_EXPORT void kbts_InferScript(kbts_direction *Direction, kbts_script *Script, kbts_script GlyphScript);
 KBTS_EXPORT int kbts_ScriptIsComplex(kbts_script Script);
-KBTS_EXPORT kbts_u32 kbts_ShaperIsComplex(kbts_shaper Shaper);
 #endif
 
 #ifdef KB_TEXT_SHAPE_IMPLEMENTATION
@@ -19739,7 +19741,7 @@ static kbts_op_list kbts_OpList(uint8_t *Ops, kbts_un Size)
 }
 #define KBTS_OP_LIST(OpList) kbts_OpList((kbts_Ops_##OpList), KBTS_ARRAY_LENGTH(kbts_Ops_##OpList))
 
-KBTS_EXPORT kbts_shape_config kbts_ShapeConfig(kbts_font *Font, kbts_u32 Script, kbts_u32 Language)
+KBTS_EXPORT kbts_shape_config kbts_ShapeConfig(kbts_font *Font, kbts_script Script, kbts_language Language)
 {
   kbts_shape_config Result = KBTS_ZERO;
 
@@ -20444,7 +20446,7 @@ KBTS_EXPORT kbts_un kbts_ReadFontData(kbts_font *Font, void *Scratch, kbts_un Sc
         {
           kbts_u16 *Base = KBTS_POINTER_OFFSET(kbts_u16, PackedLookup, Lookup.SubtableOffsets[SubstitutionIndex]);
           
-          KBTS_DUMPF("  Subtable %zu:\n", (size_t)SubstitutionIndex);
+          KBTS_DUMPF("  Subtable %zu:\n", (kbts_un)SubstitutionIndex);
 
           kbts_ByteSwapGposLookupSubtable(&ByteSwapContext, LookupList, Lookup.Type, Base);
         }
@@ -22231,7 +22233,7 @@ KBTS_EXPORT void kbts_BeginBreak(kbts_break_state *State, kbts_direction MainDir
   }
 }
 
-KBTS_EXPORT kbts_decode kbts_DecodeUtf8(const char *Utf8, size_t Length)
+KBTS_EXPORT kbts_decode kbts_DecodeUtf8(const char *Utf8, kbts_un Length)
 {
   kbts_decode Result = KBTS_ZERO;
   const char *Utf8Start = Utf8;
@@ -22312,9 +22314,9 @@ KBTS_EXPORT kbts_decode kbts_DecodeUtf8(const char *Utf8, size_t Length)
   return Result;
 }
 
-KBTS_EXPORT kbts_u32 kbts_ShaperIsComplex(kbts_shaper Shaper)
+KBTS_EXPORT int kbts_ShaperIsComplex(kbts_shaper Shaper)
 {
-  kbts_u32 Result = Shaper != KBTS_SHAPER_DEFAULT; // @Incomplete?
+  int Result = Shaper != KBTS_SHAPER_DEFAULT; // @Incomplete?
 
   return Result;
 }
