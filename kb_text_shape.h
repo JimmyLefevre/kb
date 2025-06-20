@@ -1,4 +1,4 @@
-/* kb_text_shape - v1.0 - text segmentation and shaping
+/* kb_text_shape - v1.01 - text segmentation and shaping
    by Jimmy Lefevre
 
    SECURITY
