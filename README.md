@@ -13,6 +13,7 @@
 ![Example of Khmer shaping with stb_truetype](./images/khmer.png)
 ![Example of Myanmar shaping with stb_truetype](./images/myanmar.png)
 ![Example of Gunjala Gondi shaping with stb_truetype](./images/gunjala_gondi.png)
+![Example of toggling the smallcaps font feature](./images/smallcaps.png)
 
 [kb\_text\_shape.h](./kb_text_shape.h) provides ICU-like text segmentation (i.e. breaking Unicode text by direction, line, word and grapheme). It also provides Harfbuzz-like text shaping for OpenType fonts, which means it is capable of handling complex script layout and ligatures, among other things.
 
