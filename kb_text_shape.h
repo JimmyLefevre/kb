@@ -17857,8 +17857,6 @@ Done:;
   return Result;
 }
 
-#include <emmintrin.h>
-
 static int kbts_NextLookupIndex(kbts_op_state *S, kbts_un *LookupIndex, kbts_u32 *SkipFlags_, kbts_u32 *GlyphFilter_, kbts_feature_set *FeatureSet_)
 {
   kbts_un LowestIndex = 0xFFFFFFFF;
