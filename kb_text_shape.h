@@ -20574,7 +20574,7 @@ static kbts_end_cluster_result kbts_EndCluster(kbts_shape_state *ShapeState, kbt
   return Result;
 }
 
-static kbts_op_list kbts_OpList(uint8_t *Ops, kbts_un Size)
+static kbts_op_list kbts_OpList(kbts_u8 *Ops, kbts_un Size)
 {
   kbts_op_list Result = KBTS_ZERO;
   Result.Ops = Ops;
