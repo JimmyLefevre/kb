@@ -35,6 +35,9 @@
        kbts_FreeShapeState()
        kbts_FontFromFile()
        kbts_FreeFont()
+     Additionally, we call KBTS_MEMSET(), which defaults to memset(), including outside of NO_CRT code.
+     If you want to redirect it to your own function, you can do this:
+       #define KBTS_MEMSET my_awesome_memset
 
    API
      Segmentation
@@ -268,7 +271,7 @@
 
 
 #ifndef KB_TEXT_SHAPE_INCLUDED
-#  define KB_TEXT_SHAPE_INDLUDED
+#  define KB_TEXT_SHAPE_INCLUDED
 
 #  ifndef kbts_s64
 #    if defined(_MSC_VER) || defined(__BORLANDC__)
@@ -2600,6 +2603,11 @@ KBTS_EXPORT int kbts_ScriptIsComplex(kbts_script Script);
 
 #ifndef KB_TEXT_SHAPE_NO_CRT
 #include <stdio.h>
+#endif
+
+#ifndef KBTS_MEMSET
+#include <string.h>
+#define KBTS_MEMSET memset
 #endif
 
 #ifndef kbts_ByteSwap16
@@ -16085,7 +16093,7 @@ KBTS_EXPORT kbts_un kbts_SizeOfShapeState(kbts_font *Font)
 KBTS_EXPORT kbts_shape_state *kbts_PlaceShapeState(void *Address, kbts_un Size)
 {
   kbts_shape_state *State = (kbts_shape_state *)Address;
-  memset(State, 0, Size);
+  KBTS_MEMSET(State, 0, Size);
 
   return State;
 }
@@ -16160,7 +16168,6 @@ static int kbts_GrowGlyphArray(kbts_u32 *ResumePoint_, kbts_glyph_array *Array, 
 
   if(NewTotalCount <= Array->Capacity)
   {
-    // @Cleanup: memmove
     if(NewTotalCount > TotalCount)
     {
       for(kbts_un ToIndex = NewTotalCount; ToIndex > InsertIndex + GrowCount; --ToIndex)
@@ -21627,7 +21634,7 @@ KBTS_EXPORT int kbts_PostReadFontInitialize(kbts_font *Font, void *Memory, kbts_
     kbts_un GlyphLookupSubtableMatrixSizeInBytes = (GlyphLookupSubtableMatrixSizeInBits + 7) / 8;
     GlyphLookupSubtableMatrixSizeInBytes = (GlyphLookupSubtableMatrixSizeInBytes + 3) & ~3; // Align to u32
 
-    memset(Memory, 0, MemorySize);
+    KBTS_MEMSET(Memory, 0, MemorySize);
 
     kbts_u32 *GlyphLookupMatrix = (kbts_u32 *)Memory;
     kbts_u32 *GlyphLookupSubtableMatrix = KBTS_POINTER_OFFSET(kbts_u32, GlyphLookupMatrix, GlyphLookupMatrixSizeInBytes);
@@ -23087,7 +23094,7 @@ KBTS_EXPORT void kbts_BeginBreak(kbts_break_state *State, kbts_direction MainDir
 {
   if(State)
   {
-    memset(State, 0, sizeof(*State));
+    KBTS_MEMSET(State, 0, sizeof(*State));
     State->MainDirection = (kbts_u8)MainDirection;
     State->JapaneseLineBreakStyle = JapaneseLineBreakStyle;
   }
