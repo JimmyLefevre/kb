@@ -1,4 +1,4 @@
-/* kb_text_shape - v1.02 - text segmentation and shaping
+/* kb_text_shape - v1.02a - text segmentation and shaping
    by Jimmy Lefevre
 
    SECURITY
@@ -236,10 +236,11 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
-     1.02 - Added per-glyph manual feature control through kbts_FeatureOverride(), kbts_GlyphConfig()
-            Added enum definitions for features cv01-cv99 and ss01-ss20
-     1.01 - Header cleanup and glyph output documentation
-     1.0  - Initial release
+     1.02a - Positioning fix for format 2 GPOS pair adjustments
+     1.02  - Added per-glyph manual feature control through kbts_FeatureOverride(), kbts_GlyphConfig()
+             Added enum definitions for features cv01-cv99 and ss01-ss20
+     1.01  - Header cleanup and glyph output documentation
+     1.0   - Initial release
 
    TODO
      Word dictionaries for word breaking: CJK, etc.
@@ -14380,9 +14381,15 @@ static void kbts_ByteSwapClassDefinition(kbts_byteswap_context *Context, kbts_u1
   }
 }
 
-static kbts_u16 kbts_GlyphClassFromTable(kbts_u16 *ClassDefinitionBase, kbts_un Id)
+typedef struct kbts_glyph_class_from_table_result
 {
-  kbts_u16 Result = 0;
+  int Found;
+  kbts_u16 Class;
+} kbts_glyph_class_from_table_result;
+
+static kbts_glyph_class_from_table_result kbts_GlyphClassFromTable(kbts_u16 *ClassDefinitionBase, kbts_un Id)
+{
+  kbts_glyph_class_from_table_result Result = KBTS_ZERO;
 
   // From the Microsoft docs:
   //   There is one offset to a ChainedClassSequenceRuleSet subtable for each class defined in the input sequence
@@ -14402,7 +14409,8 @@ static kbts_u16 kbts_GlyphClassFromTable(kbts_u16 *ClassDefinitionBase, kbts_un 
     kbts_un Offset = Id - ClassDef->StartGlyphId;
     if(Offset < ClassDef->GlyphCount)
     {
-      Result = GlyphClasses[Offset];
+      Result.Class = GlyphClasses[Offset];
+      Result.Found = 1;
     }
   }
   else if(*ClassDefinitionBase == 2)
@@ -14419,7 +14427,8 @@ static kbts_u16 kbts_GlyphClassFromTable(kbts_u16 *ClassDefinitionBase, kbts_un 
     }
     if((Id >= Ranges->StartGlyphId) && (Id <= Ranges->EndGlyphId))
     {
-      Result = Ranges->Class;
+      Result.Class = Ranges->Class;
+      Result.Found = 1;
     }
   }
 
@@ -15427,20 +15436,17 @@ static kbts_glyph_classes kbts_GlyphClasses(kbts_font *Font, kbts_u32 Id)
   kbts_gdef *Gdef = Font->Gdef;
   if(Gdef)
   {
-    kbts_u16 Class = 0;
     if(Gdef->ClassDefinitionOffset)
     {
       kbts_u16 *ClassDefBase = KBTS_POINTER_OFFSET(kbts_u16, Gdef, Gdef->ClassDefinitionOffset);
-      Class = kbts_GlyphClassFromTable(ClassDefBase, Id);
+      Result.Class = kbts_GlyphClassFromTable(ClassDefBase, Id).Class;
     }
 
-    if(Gdef->MarkAttachmentClassDefinitionOffset && (Class == KBTS_GLYPH_CLASS_MARK))
+    if(Gdef->MarkAttachmentClassDefinitionOffset && (Result.Class == KBTS_GLYPH_CLASS_MARK))
     {
       kbts_u16 *MarkAttachmentClassDefBase = KBTS_POINTER_OFFSET(kbts_u16, Gdef, Gdef->MarkAttachmentClassDefinitionOffset);
-      Result.MarkAttachmentClass = kbts_GlyphClassFromTable(MarkAttachmentClassDefBase, Id);
+      Result.MarkAttachmentClass = kbts_GlyphClassFromTable(MarkAttachmentClassDefBase, Id).Class;
     }
-
-    Result.Class = Class;
   }
 
   return Result;
@@ -16412,10 +16418,10 @@ static kbts_sequence_lookup_result kbts_DoSequenceLookup(kbts_unpacked_lookup *L
     // Instead, we know which set to use based on the current glyph's class.
     // From the Microsoft docs:
     //   The class value is used as the index into an array of offsets to ClassSequenceRuleSet tables.
-    kbts_u16 CurrentGlyphClass = kbts_GlyphClassFromTable(ClassDefinitionBase, CurrentGlyph->Id);
-    kbts_class_sequence_rule_set *Set = kbts_GetClassSequenceRuleSet(Subst, CurrentGlyphClass);
+    kbts_glyph_class_from_table_result CurrentGlyphClass = kbts_GlyphClassFromTable(ClassDefinitionBase, CurrentGlyph->Id);
+    kbts_class_sequence_rule_set *Set = kbts_GetClassSequenceRuleSet(Subst, CurrentGlyphClass.Class);
 
-    if((CurrentGlyphClass < Subst->ClassSequenceRuleSetCount) && Set)
+    if((CurrentGlyphClass.Class < Subst->ClassSequenceRuleSetCount) && Set)
     {
       KBTS_FOR(RuleIndex, 0, Set->Count)
       {
@@ -16427,7 +16433,7 @@ static kbts_sequence_lookup_result kbts_DoSequenceLookup(kbts_unpacked_lookup *L
           if(!kbts_SkipGlyph(InputGlyph, Lookup, SkipFlags, SkipUnicodeFlags))
           {
             InputOffsets[InputCount] = (kbts_u16)(InputGlyph - CurrentGlyph);
-            InputClasses[InputCount++] = kbts_GlyphClassFromTable(ClassDefinitionBase, InputGlyph->Id);
+            InputClasses[InputCount++] = kbts_GlyphClassFromTable(ClassDefinitionBase, InputGlyph->Id).Class;
           }
 
           InputGlyph += 1;
@@ -16555,7 +16561,7 @@ static kbts_sequence_lookup_result kbts_DoSequenceLookup(kbts_unpacked_lookup *L
     // current glyph. The class value is used as the index into an array of offsets to ChainedClassSequenceRuleSet
     // tables.
     //
-    kbts_u16 CurrentGlyphClass = kbts_GlyphClassFromTable(InputClassDefinition, CurrentGlyph->Id);
+    kbts_u16 CurrentGlyphClass = kbts_GlyphClassFromTable(InputClassDefinition, CurrentGlyph->Id).Class;
     kbts_chained_sequence_rule_set *Set = kbts_GetChainedClassSequenceRuleSet(Subst, CurrentGlyphClass);
     // If the glyph was contained in the coverage table, then it should have a valid class.
     // Nevertheless, one Harfbuzz test font did not remove out-of-bounds glyph classes from the class definition
@@ -16578,8 +16584,9 @@ static kbts_sequence_lookup_result kbts_DoSequenceLookup(kbts_unpacked_lookup *L
         {
           if(!kbts_SkipGlyph(BacktrackGlyph, Lookup, SkipFlags, SkipUnicodeFlags))
           {
-            kbts_u16 Class = kbts_GlyphClassFromTable(BacktrackClassDefinition, BacktrackGlyph->Id);
-            BacktrackClasses[BacktrackClassCount++] = Class;
+            // @Robustness: Do we want to break if we don't find a class?
+            kbts_glyph_class_from_table_result Class = kbts_GlyphClassFromTable(BacktrackClassDefinition, BacktrackGlyph->Id);
+            BacktrackClasses[BacktrackClassCount++] = Class.Class;
           }
 
           BacktrackGlyph -= 1;
@@ -16590,19 +16597,20 @@ static kbts_sequence_lookup_result kbts_DoSequenceLookup(kbts_unpacked_lookup *L
         {
           if(!kbts_SkipGlyph(InputGlyph, Lookup, SkipFlags, SkipUnicodeFlags))
           {
-            kbts_u16 InputClass = kbts_GlyphClassFromTable(InputClassDefinition, InputGlyph->Id);
+            kbts_glyph_class_from_table_result InputClass = kbts_GlyphClassFromTable(InputClassDefinition, InputGlyph->Id);
             // In many cases, the font designer just wants to match "a set of glyphs" forward,
             // and it doesn't matter whether those glyphs are in the input sequence or part of the lookahead.
             // This happens often enough that we care to special-case it.
-            kbts_u16 LookaheadClass = InputClass;
+            kbts_glyph_class_from_table_result LookaheadClass = InputClass;
             if(LookaheadClassDefinition != InputClassDefinition)
             {
               LookaheadClass = kbts_GlyphClassFromTable(LookaheadClassDefinition, InputGlyph->Id);
             }
 
+            // @Robustness: Do we want to break if we don't find a class?
             InputClassOffsets[InputClassCount] = (kbts_u16)(InputGlyph - CurrentGlyph);
-            InputClasses[InputClassCount] = InputClass;
-            LookaheadClasses[InputClassCount] = LookaheadClass;
+            InputClasses[InputClassCount] = InputClass.Class;
+            LookaheadClasses[InputClassCount] = LookaheadClass.Class;
 
             InputClassCount += 1;
           }
@@ -16837,6 +16845,7 @@ static kbts_do_single_adjustment_result kbts_DoSingleAdjustment(kbts_shape_confi
 
           kbts_unpacked_value_record Unpacked1 = KBTS_ZERO;
           kbts_unpacked_value_record Unpacked2 = KBTS_ZERO;
+          int Valid = 0;
 
           if(Base[0] == 1)
           {
@@ -16861,6 +16870,7 @@ static kbts_do_single_adjustment_result kbts_DoSingleAdjustment(kbts_shape_confi
                 Unpacked1 = kbts_UnpackValueRecord(Adjust, Adjust->ValueFormat1, Records);
                 Records += Unpacked1.Size;
                 Unpacked2 = kbts_UnpackValueRecord(Adjust, Adjust->ValueFormat2, Records);
+                Valid = 1;
               }
             }
           }
@@ -16875,28 +16885,41 @@ static kbts_do_single_adjustment_result kbts_DoSingleAdjustment(kbts_shape_confi
             kbts_un PairRecordSize = Size1 + Size2;
             kbts_u16 *PairRecords = KBTS_POINTER_AFTER(kbts_u16, Adjust);
 
-            kbts_u32 Class1 = kbts_GlyphClassFromTable(ClassDef1, CurrentGlyph->Id);
-            kbts_u32 Class2 = kbts_GlyphClassFromTable(ClassDef2, NextGlyphId);
+            // From the Microsoft docs:
+            //   PairPosFormat2 requires that each glyph in all pairs be assigned to a class, which is
+            //   identified by an integer called a class value.
+            // This _seems_ like it would mean that, if either class definition table does not define a class
+            // for its corresponding glyph, we should skip the lookup.
+            // However, this seems wrong in practice. If the first glyph has no class, we just pretend it's 0.
+            // The second glyph, however, does need to have an explicitly-defined class. Ugh.
+            kbts_glyph_class_from_table_result Class2 = kbts_GlyphClassFromTable(ClassDef2, NextGlyphId);
+            if(Class2.Found)
+            {
+              kbts_glyph_class_from_table_result Class1 = kbts_GlyphClassFromTable(ClassDef1, CurrentGlyph->Id);
+              kbts_u16 *PairRecord = PairRecords + Class1.Class * PairRecordSize * Adjust->Class2Count + Class2.Class * PairRecordSize;
 
-            kbts_u16 *PairRecord = PairRecords + Class1 * PairRecordSize * Adjust->Class2Count + Class2 * PairRecordSize;
+              Unpacked1 = kbts_UnpackValueRecord(Adjust, Adjust->ValueFormat1, PairRecord);
+              PairRecord += Size1;
 
-            Unpacked1 = kbts_UnpackValueRecord(Adjust, Adjust->ValueFormat1, PairRecord);
-            PairRecord += Size1;
-
-            Unpacked2 = kbts_UnpackValueRecord(Adjust, Adjust->ValueFormat2, PairRecord);
-            PairRecord += Size2;
+              Unpacked2 = kbts_UnpackValueRecord(Adjust, Adjust->ValueFormat2, PairRecord);
+              PairRecord += Size2;
+              Valid = 1;
+            }
           }
 
-          kbts_ApplyValueRecord(CurrentGlyph, &Unpacked1);
-          CurrentGlyph->Flags |= KBTS_GLYPH_FLAG_USED_IN_GPOS;
-
-          kbts_ApplyValueRecord(&InputGlyphs[NextGlyph.Index], &Unpacked2);
-          NextGlyph.Glyph->Flags |= KBTS_GLYPH_FLAG_USED_IN_GPOS;
-
-          Result.PositionedGlyphCount = 2;
-          if(!Unpacked2.Size)
+          if(Valid)
           {
-            Result.PositionedGlyphCount = 1;
+            kbts_ApplyValueRecord(CurrentGlyph, &Unpacked1);
+            CurrentGlyph->Flags |= KBTS_GLYPH_FLAG_USED_IN_GPOS;
+
+            kbts_ApplyValueRecord(&InputGlyphs[NextGlyph.Index], &Unpacked2);
+            NextGlyph.Glyph->Flags |= KBTS_GLYPH_FLAG_USED_IN_GPOS;
+
+            Result.PositionedGlyphCount = 2;
+            if(!Unpacked2.Size)
+            {
+              Result.PositionedGlyphCount = 1;
+            }
           }
         }
       }
@@ -21762,7 +21785,7 @@ KBTS_EXPORT int kbts_PostReadFontInitialize(kbts_font *Font, void *Memory, kbts_
                 {
                   kbts_sequence_context_2 *Subst = (kbts_sequence_context_2 *)Base;
                   kbts_u16 *ClassDefBase = KBTS_POINTER_OFFSET(kbts_u16, Subst, Subst->ClassDefOffset);
-                  kbts_u32 Class = kbts_GlyphClassFromTable(ClassDefBase, Glyph.Id);
+                  kbts_glyph_class_from_table_result Class = kbts_GlyphClassFromTable(ClassDefBase, Glyph.Id);
 
                   KBTS_FOR(SetIndex, 0, Subst->ClassSequenceRuleSetCount)
                   {
@@ -21778,7 +21801,7 @@ KBTS_EXPORT int kbts_PostReadFontInitialize(kbts_font *Font, void *Memory, kbts_
 
                         KBTS_FOR(SequenceIndex, 1, Rule->GlyphCount)
                         {
-                          if(SequenceClasses[SequenceIndex - 1] == Class)
+                          if(SequenceClasses[SequenceIndex - 1] == Class.Class)
                           {
                             InSecondary = 1;
                             goto DoneCheckingForInclusion;
@@ -21868,9 +21891,9 @@ KBTS_EXPORT int kbts_PostReadFontInitialize(kbts_font *Font, void *Memory, kbts_
                   kbts_u16 *InputClassDefinition = KBTS_POINTER_OFFSET(kbts_u16, Subst, Subst->InputClassDefOffset);
                   kbts_u16 *LookaheadClassDefinition = KBTS_POINTER_OFFSET(kbts_u16, Subst, Subst->LookaheadClassDefOffset);
 
-                  kbts_u16 BacktrackClass = kbts_GlyphClassFromTable(BacktrackClassDefinition, Glyph.Id);
-                  kbts_u16 InputClass = kbts_GlyphClassFromTable(InputClassDefinition, Glyph.Id);
-                  kbts_u16 LookaheadClass = kbts_GlyphClassFromTable(LookaheadClassDefinition, Glyph.Id);
+                  kbts_u16 BacktrackClass = kbts_GlyphClassFromTable(BacktrackClassDefinition, Glyph.Id).Class;
+                  kbts_u16 InputClass = kbts_GlyphClassFromTable(InputClassDefinition, Glyph.Id).Class;
+                  kbts_u16 LookaheadClass = kbts_GlyphClassFromTable(LookaheadClassDefinition, Glyph.Id).Class;
 
                   KBTS_FOR(SetIndex, 0, Subst->ChainedClassSequenceRuleSetCount)
                   {
