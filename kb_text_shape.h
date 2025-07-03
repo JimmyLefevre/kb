@@ -13954,13 +13954,16 @@ static int kbts_AlreadyVisited(kbts_byteswap_context *Context, void *Pointer)
     if(Context->PointerCount)
     {
       kbts_un PointerCount = Context->PointerCount;
-      while(PointerCount > 1)
+      if(PointerCount)
       {
-        kbts_un HalfCount = PointerCount / 2;
-        Index = (Pointers[Index + HalfCount - 1] < Pointer32) ? (Index + HalfCount) : Index;
-        PointerCount -= HalfCount;
+        while(PointerCount > 1)
+        {
+          kbts_un HalfCount = PointerCount / 2;
+          Index = (Pointers[Index + HalfCount - 1] < Pointer32) ? (Index + HalfCount) : Index;
+          PointerCount -= HalfCount;
+        }
+        Result = (Pointer32 == Pointers[Index]);
       }
-      Result = (Pointer32 == Pointers[Index]);
     }
 
     if(!Result && (Context->PointerCount < Context->PointerCapacity))
@@ -14419,16 +14422,19 @@ static kbts_glyph_class_from_table_result kbts_GlyphClassFromTable(kbts_u16 *Cla
     kbts_class_range_record *Ranges = KBTS_POINTER_AFTER(kbts_class_range_record, ClassDef);
 
     kbts_un RangeCount = ClassDef->Count;
-    while(RangeCount > 1)
+    if(RangeCount)
     {
-      kbts_un HalfCount = RangeCount / 2;
-      Ranges = (Ranges[HalfCount - 1].EndGlyphId < Id) ? (Ranges + HalfCount) : Ranges;
-      RangeCount -= HalfCount;
-    }
-    if((Id >= Ranges->StartGlyphId) && (Id <= Ranges->EndGlyphId))
-    {
-      Result.Class = Ranges->Class;
-      Result.Found = 1;
+      while(RangeCount > 1)
+      {
+        kbts_un HalfCount = RangeCount / 2;
+        Ranges = (Ranges[HalfCount - 1].EndGlyphId < Id) ? (Ranges + HalfCount) : Ranges;
+        RangeCount -= HalfCount;
+      }
+      if((Id >= Ranges->StartGlyphId) && (Id <= Ranges->EndGlyphId))
+      {
+        Result.Class = Ranges->Class;
+        Result.Found = 1;
+      }
     }
   }
 
@@ -14441,37 +14447,40 @@ static kbts_cover_glyph_result kbts_CoverGlyph(kbts_coverage *Coverage, kbts_u32
   kbts_cover_glyph_result Result = KBTS_ZERO;
   kbts_un Count = Coverage->Count;
 
-  if(Coverage->Format == 1)
+  if(Count)
   {
-    kbts_u16 *GlyphIds = KBTS_POINTER_AFTER(kbts_u16, Coverage);
+    if(Coverage->Format == 1)
+    {
+      kbts_u16 *GlyphIds = KBTS_POINTER_AFTER(kbts_u16, Coverage);
 
-    while(Count > 1)
-    {
-      kbts_un HalfCount = Count / 2;
-      GlyphIds = (GlyphIds[HalfCount - 1] < GlyphId) ? (GlyphIds + HalfCount) : GlyphIds;
-      Count -= HalfCount;
-    }
+      while(Count > 1)
+      {
+        kbts_un HalfCount = Count / 2;
+        GlyphIds = (GlyphIds[HalfCount - 1] < GlyphId) ? (GlyphIds + HalfCount) : GlyphIds;
+        Count -= HalfCount;
+      }
 
-    if(GlyphId == *GlyphIds)
-    {
-      Result.Valid = 1;
-      Result.Index = (kbts_u32)(GlyphIds - KBTS_POINTER_AFTER(kbts_u16, Coverage));
+      if(GlyphId == *GlyphIds)
+      {
+        Result.Valid = 1;
+        Result.Index = (kbts_u32)(GlyphIds - KBTS_POINTER_AFTER(kbts_u16, Coverage));
+      }
     }
-  }
-  else if(Coverage->Format == 2)
-  {
-    kbts_range_record *Ranges = KBTS_POINTER_AFTER(kbts_range_record, Coverage);
+    else if(Coverage->Format == 2)
+    {
+      kbts_range_record *Ranges = KBTS_POINTER_AFTER(kbts_range_record, Coverage);
 
-    while(Count > 1)
-    {
-      kbts_un HalfCount = Count / 2;
-      Ranges = (Ranges[HalfCount - 1].EndGlyphId < GlyphId) ? (Ranges + HalfCount) : Ranges;
-      Count -= HalfCount;
-    }
-    if((GlyphId >= Ranges->StartGlyphId) && (GlyphId <= Ranges->EndGlyphId))
-    {
-      Result.Valid = 1;
-      Result.Index = Ranges->StartCoverageIndex + GlyphId - Ranges->StartGlyphId;
+      while(Count > 1)
+      {
+        kbts_un HalfCount = Count / 2;
+        Ranges = (Ranges[HalfCount - 1].EndGlyphId < GlyphId) ? (Ranges + HalfCount) : Ranges;
+        Count -= HalfCount;
+      }
+      if((GlyphId >= Ranges->StartGlyphId) && (GlyphId <= Ranges->EndGlyphId))
+      {
+        Result.Valid = 1;
+        Result.Index = Ranges->StartCoverageIndex + GlyphId - Ranges->StartGlyphId;
+      }
     }
   }
 
@@ -16888,14 +16897,14 @@ static kbts_do_single_adjustment_result kbts_DoSingleAdjustment(kbts_shape_confi
             // From the Microsoft docs:
             //   PairPosFormat2 requires that each glyph in all pairs be assigned to a class, which is
             //   identified by an integer called a class value.
-            // This _seems_ like it would mean that, if either class definition table does not define a class
-            // for its corresponding glyph, we should skip the lookup.
-            // However, this seems wrong in practice. If the first glyph has no class, we just pretend it's 0.
-            // The second glyph, however, does need to have an explicitly-defined class. Ugh.
+            // This _seems_ like it would mean that, if either glyph is not specified in its respective
+            // class definition table, then we should skip the lookup.
+            // However, this seems wrong in practice. Undefined classes seem to just default to 0, and then
+            // the bounds check takes care of deciding whether the lookup is okay to apply or not.
+            kbts_glyph_class_from_table_result Class1 = kbts_GlyphClassFromTable(ClassDef1, CurrentGlyph->Id);
             kbts_glyph_class_from_table_result Class2 = kbts_GlyphClassFromTable(ClassDef2, NextGlyphId);
-            if(Class2.Found)
+            if((Class1.Class < Adjust->Class1Count) && (Class2.Class < Adjust->Class2Count))
             {
-              kbts_glyph_class_from_table_result Class1 = kbts_GlyphClassFromTable(ClassDef1, CurrentGlyph->Id);
               kbts_u16 *PairRecord = PairRecords + Class1.Class * PairRecordSize * Adjust->Class2Count + Class2.Class * PairRecordSize;
 
               Unpacked1 = kbts_UnpackValueRecord(Adjust, Adjust->ValueFormat1, PairRecord);
