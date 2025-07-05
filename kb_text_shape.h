@@ -1,4 +1,4 @@
-/* kb_text_shape - v1.02b - text segmentation and shaping
+/* kb_text_shape - v1.03 - text segmentation and shaping
    by Jimmy Lefevre
 
    SECURITY
@@ -42,7 +42,7 @@
    API
      Segmentation
        kbts_BeginBreak()
-       kbts_BreakAddCodepoint() -- Feed a codepoint to the breaker, call kbts_Break() after this
+       kbts_BreakAddCodepoint() -- Feed a codepoint to the breaker, call kbts_Break() immediately after this to get results
        kbts_BreakFlush()
        kbts_Break()             -- Call repeatedly to get breaks
        kbts_BreakStateIsValid()
@@ -55,11 +55,19 @@
        kbts_FreeShapeState()
        kbts_ShapeConfig()       -- Bake a font/script-specific shaping configuration
        kbts_CodepointToGlyph()
-       kbts_FeatureOverride()   -- Describe a manual override for a font feature
-       kbts_GlyphConfig()       -- Bake per-glyph parameters (like feature overrides)
        kbts_InferScript()       -- Hacky script recognition for when no segmentation data is available
        kbts_Shape()             -- Returns 1 if more memory is needed, you should probably call this in a while()
        kbts_ResetShapeState()
+     Shaping - feature control
+       kbts_FeatureOverride()   -- Describe a manual override for a font feature
+       kbts_FeatureOverrideFromTag() -- This also works on features that do not have a kbts_feature_id, but they will be slower.
+                                        (Calling this with a feature that has a kbts_feature_id will not be slower.)
+       kbts_GlyphConfig()       -- Bake per-glyph parameters (for now, only feature overrides)
+     Shaping - feature control - incremental API
+       With this API, you provide a buffer first, and gradually construct the glyph_config.
+       kbts_EmptyGlyphConfig()
+       kbts_GlyphConfigOverrideFeature()
+       kbts_GlyphConfigOverrideFeatureFromTag()
      Layout
        kbts_Cursor()
        kbts_PositionGlyph()
@@ -74,6 +82,8 @@
        kbts_ScriptIsComplex()
        kbts_InferScript()       -- Stupid script detection. Do not ship this! Use script breaks instead.
        kbts_DecodeUtf8()
+       kbts_ScriptTagToScript()
+       kbts_FeatureTagToId()
 
    EXAMPLE USAGE
      Complete example:
@@ -236,6 +246,10 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     1.03  - New functions: kbts_FeatureTagToId(), kbts_FeatureOverrideFromTag(), kbts_EmptyGlyphConfig(), kbts_GlyphConfigOverrideFeature(), kbts_GlyphConfigOverrideFeatureFromTag(), kbts_ScriptTagToScript()
+             Unregistered features can now be overriden using their tags.
+               This is slower than overriding registered features, i.e. those that have a kbts_feature_id.
+             Compiler warning cleanup
      1.02b - Feature control for GPOS features
              Bounds checking in ReadFontHeader
      1.02a - Positioning fix for format 2 GPOS pair adjustments
@@ -370,6 +384,8 @@ typedef kbts_u8 kbts_joining_feature;
 enum kbts_joining_feature_enum
 {
   KBTS_JOINING_FEATURE_NONE,
+
+  // These must correspond with glyph_flags and FEATURE_IDs.
   KBTS_JOINING_FEATURE_ISOL,
   KBTS_JOINING_FEATURE_FINA,
   KBTS_JOINING_FEATURE_FIN2,
@@ -1221,8 +1237,11 @@ enum kbts_glyph_flags_enum
 // In USE, glyphs are mostly not pre-flagged for feature application.
 // However, we do want to flag rphf/pref results for reordering, so we want to
 // keep all of the flags as usual, and only use these feature flags for filtering.
-#define KBTS_USE_GLYPH_FEATURE_MASK (((KBTS_GLYPH_FLAG_INIT << 1) - 1) | KBTS_GLYPH_FLAG_NUMR | KBTS_GLYPH_FLAG_DNOM | KBTS_GLYPH_FLAG_FRAC)
-#define KBTS_JOINING_FEATURE_MASK (KBTS_GLYPH_FLAG_ISOL | KBTS_GLYPH_FLAG_FINA | KBTS_GLYPH_FLAG_FIN2 | KBTS_GLYPH_FLAG_FIN3 | KBTS_GLYPH_FLAG_MEDI | KBTS_GLYPH_FLAG_MED2 | KBTS_GLYPH_FLAG_INIT)
+#define KBTS_USE_GLYPH_FEATURE_MASK (KBTS_GLYPH_FLAG_ISOL | KBTS_GLYPH_FLAG_FINA | KBTS_GLYPH_FLAG_FIN2 | KBTS_GLYPH_FLAG_FIN3 | \
+                                     KBTS_GLYPH_FLAG_MEDI | KBTS_GLYPH_FLAG_MED2 | KBTS_GLYPH_FLAG_INIT | KBTS_GLYPH_FLAG_NUMR | \
+                                     KBTS_GLYPH_FLAG_DNOM | KBTS_GLYPH_FLAG_FRAC)
+#define KBTS_JOINING_FEATURE_MASK (KBTS_GLYPH_FLAG_ISOL | KBTS_GLYPH_FLAG_FINA | KBTS_GLYPH_FLAG_FIN2 | KBTS_GLYPH_FLAG_FIN3 | \
+                                   KBTS_GLYPH_FLAG_MEDI | KBTS_GLYPH_FLAG_MED2 | KBTS_GLYPH_FLAG_INIT)
 #define KBTS_JOINING_FEATURE_TO_GLYPH_FLAG(Feature) (1 << ((Feature) - 1))
 
 // Japanese text contains "kinsoku" characters, around which breaking a line is forbidden.
@@ -1450,8 +1469,184 @@ enum kbts_shaper_enum
 
   KBTS_SHAPER_COUNT,
 };
+typedef kbts_u32 kbts_script_tag;
+enum kbts_script_tag_enum
+{
+  KBTS_SCRIPT_TAG_DONT_KNOW = KBTS_FOURCC(' ', ' ', ' ', ' '),
+  KBTS_SCRIPT_TAG_ADLAM = KBTS_FOURCC('a', 'd', 'l', 'm'),
+  KBTS_SCRIPT_TAG_AHOM = KBTS_FOURCC('a', 'h', 'o', 'm'),
+  KBTS_SCRIPT_TAG_ANATOLIAN_HIEROGLYPHS = KBTS_FOURCC('h', 'l', 'u', 'w'),
+  KBTS_SCRIPT_TAG_ARABIC = KBTS_FOURCC('a', 'r', 'a', 'b'),
+  KBTS_SCRIPT_TAG_ARMENIAN = KBTS_FOURCC('a', 'r', 'm', 'n'),
+  KBTS_SCRIPT_TAG_AVESTAN = KBTS_FOURCC('a', 'v', 's', 't'),
+  KBTS_SCRIPT_TAG_BALINESE = KBTS_FOURCC('b', 'a', 'l', 'i'),
+  KBTS_SCRIPT_TAG_BAMUM = KBTS_FOURCC('b', 'a', 'm', 'u'),
+  KBTS_SCRIPT_TAG_BASSA_VAH = KBTS_FOURCC('b', 'a', 's', 's'),
+  KBTS_SCRIPT_TAG_BATAK = KBTS_FOURCC('b', 'a', 't', 'k'),
+  KBTS_SCRIPT_TAG_BENGALI = KBTS_FOURCC('b', 'n', 'g', '2'),
+  KBTS_SCRIPT_TAG_BHAIKSUKI = KBTS_FOURCC('b', 'h', 'k', 's'),
+  KBTS_SCRIPT_TAG_BOPOMOFO = KBTS_FOURCC('b', 'o', 'p', 'o'),
+  KBTS_SCRIPT_TAG_BRAHMI = KBTS_FOURCC('b', 'r', 'a', 'h'),
+  KBTS_SCRIPT_TAG_BUGINESE = KBTS_FOURCC('b', 'u', 'g', 'i'),
+  KBTS_SCRIPT_TAG_BUHID = KBTS_FOURCC('b', 'u', 'h', 'd'),
+  KBTS_SCRIPT_TAG_CANADIAN_SYLLABICS = KBTS_FOURCC('c', 'a', 'n', 's'),
+  KBTS_SCRIPT_TAG_CARIAN = KBTS_FOURCC('c', 'a', 'r', 'i'),
+  KBTS_SCRIPT_TAG_CAUCASIAN_ALBANIAN = KBTS_FOURCC('a', 'g', 'h', 'b'),
+  KBTS_SCRIPT_TAG_CHAKMA = KBTS_FOURCC('c', 'a', 'k', 'm'),
+  KBTS_SCRIPT_TAG_CHAM = KBTS_FOURCC('c', 'h', 'a', 'm'),
+  KBTS_SCRIPT_TAG_CHEROKEE = KBTS_FOURCC('c', 'h', 'e', 'r'),
+  KBTS_SCRIPT_TAG_CHORASMIAN = KBTS_FOURCC('c', 'h', 'r', 's'),
+  KBTS_SCRIPT_TAG_CJK_IDEOGRAPHIC = KBTS_FOURCC('h', 'a', 'n', 'i'),
+  KBTS_SCRIPT_TAG_COPTIC = KBTS_FOURCC('c', 'o', 'p', 't'),
+  KBTS_SCRIPT_TAG_CYPRIOT_SYLLABARY = KBTS_FOURCC('c', 'p', 'r', 't'),
+  KBTS_SCRIPT_TAG_CYPRO_MINOAN = KBTS_FOURCC('c', 'p', 'm', 'n'),
+  KBTS_SCRIPT_TAG_CYRILLIC = KBTS_FOURCC('c', 'y', 'r', 'l'),
+  KBTS_SCRIPT_TAG_DEFAULT = KBTS_FOURCC('D', 'F', 'L', 'T'),
+  KBTS_SCRIPT_TAG_DEFAULT2 = KBTS_FOURCC('D', 'F', 'L', 'T'),
+  KBTS_SCRIPT_TAG_DESERET = KBTS_FOURCC('d', 's', 'r', 't'),
+  KBTS_SCRIPT_TAG_DEVANAGARI = KBTS_FOURCC('d', 'e', 'v', '2'),
+  KBTS_SCRIPT_TAG_DIVES_AKURU = KBTS_FOURCC('d', 'i', 'a', 'k'),
+  KBTS_SCRIPT_TAG_DOGRA = KBTS_FOURCC('d', 'o', 'g', 'r'),
+  KBTS_SCRIPT_TAG_DUPLOYAN = KBTS_FOURCC('d', 'u', 'p', 'l'),
+  KBTS_SCRIPT_TAG_EGYPTIAN_HIEROGLYPHS = KBTS_FOURCC('e', 'g', 'y', 'p'),
+  KBTS_SCRIPT_TAG_ELBASAN = KBTS_FOURCC('e', 'l', 'b', 'a'),
+  KBTS_SCRIPT_TAG_ELYMAIC = KBTS_FOURCC('e', 'l', 'y', 'm'),
+  KBTS_SCRIPT_TAG_ETHIOPIC = KBTS_FOURCC('e', 't', 'h', 'i'),
+  KBTS_SCRIPT_TAG_GARAY = KBTS_FOURCC('g', 'a', 'r', 'a'),
+  KBTS_SCRIPT_TAG_GEORGIAN = KBTS_FOURCC('g', 'e', 'o', 'r'),
+  KBTS_SCRIPT_TAG_GLAGOLITIC = KBTS_FOURCC('g', 'l', 'a', 'g'),
+  KBTS_SCRIPT_TAG_GOTHIC = KBTS_FOURCC('g', 'o', 't', 'h'),
+  KBTS_SCRIPT_TAG_GRANTHA = KBTS_FOURCC('g', 'r', 'a', 'n'),
+  KBTS_SCRIPT_TAG_GREEK = KBTS_FOURCC('g', 'r', 'e', 'k'),
+  KBTS_SCRIPT_TAG_GUJARATI = KBTS_FOURCC('g', 'j', 'r', '2'),
+  KBTS_SCRIPT_TAG_GUNJALA_GONDI = KBTS_FOURCC('g', 'o', 'n', 'g'),
+  KBTS_SCRIPT_TAG_GURMUKHI = KBTS_FOURCC('g', 'u', 'r', '2'),
+  KBTS_SCRIPT_TAG_GURUNG_KHEMA = KBTS_FOURCC('g', 'u', 'k', 'h'),
+  KBTS_SCRIPT_TAG_HANGUL = KBTS_FOURCC('h', 'a', 'n', 'g'),
+  KBTS_SCRIPT_TAG_HANIFI_ROHINGYA = KBTS_FOURCC('r', 'o', 'h', 'g'),
+  KBTS_SCRIPT_TAG_HANUNOO = KBTS_FOURCC('h', 'a', 'n', 'o'),
+  KBTS_SCRIPT_TAG_HATRAN = KBTS_FOURCC('h', 'a', 't', 'r'),
+  KBTS_SCRIPT_TAG_HEBREW = KBTS_FOURCC('h', 'e', 'b', 'r'),
+  KBTS_SCRIPT_TAG_HIRAGANA = KBTS_FOURCC('k', 'a', 'n', 'a'),
+  KBTS_SCRIPT_TAG_IMPERIAL_ARAMAIC = KBTS_FOURCC('a', 'r', 'm', 'i'),
+  KBTS_SCRIPT_TAG_INSCRIPTIONAL_PAHLAVI = KBTS_FOURCC('p', 'h', 'l', 'i'),
+  KBTS_SCRIPT_TAG_INSCRIPTIONAL_PARTHIAN = KBTS_FOURCC('p', 'r', 't', 'i'),
+  KBTS_SCRIPT_TAG_JAVANESE = KBTS_FOURCC('j', 'a', 'v', 'a'),
+  KBTS_SCRIPT_TAG_KAITHI = KBTS_FOURCC('k', 't', 'h', 'i'),
+  KBTS_SCRIPT_TAG_KANNADA = KBTS_FOURCC('k', 'n', 'd', '2'),
+  KBTS_SCRIPT_TAG_KATAKANA = KBTS_FOURCC('k', 'a', 'n', 'a'),
+  KBTS_SCRIPT_TAG_KAWI = KBTS_FOURCC('k', 'a', 'w', 'i'),
+  KBTS_SCRIPT_TAG_KAYAH_LI = KBTS_FOURCC('k', 'a', 'l', 'i'),
+  KBTS_SCRIPT_TAG_KHAROSHTHI = KBTS_FOURCC('k', 'h', 'a', 'r'),
+  KBTS_SCRIPT_TAG_KHITAN_SMALL_SCRIPT = KBTS_FOURCC('k', 'i', 't', 's'),
+  KBTS_SCRIPT_TAG_KHMER = KBTS_FOURCC('k', 'h', 'm', 'r'),
+  KBTS_SCRIPT_TAG_KHOJKI = KBTS_FOURCC('k', 'h', 'o', 'j'),
+  KBTS_SCRIPT_TAG_KHUDAWADI = KBTS_FOURCC('s', 'i', 'n', 'd'),
+  KBTS_SCRIPT_TAG_KIRAT_RAI = KBTS_FOURCC('k', 'r', 'a', 'i'),
+  KBTS_SCRIPT_TAG_LAO = KBTS_FOURCC('l', 'a', 'o', ' '),
+  KBTS_SCRIPT_TAG_LATIN = KBTS_FOURCC('l', 'a', 't', 'n'),
+  KBTS_SCRIPT_TAG_LEPCHA = KBTS_FOURCC('l', 'e', 'p', 'c'),
+  KBTS_SCRIPT_TAG_LIMBU = KBTS_FOURCC('l', 'i', 'm', 'b'),
+  KBTS_SCRIPT_TAG_LINEAR_A = KBTS_FOURCC('l', 'i', 'n', 'a'),
+  KBTS_SCRIPT_TAG_LINEAR_B = KBTS_FOURCC('l', 'i', 'n', 'b'),
+  KBTS_SCRIPT_TAG_LISU = KBTS_FOURCC('l', 'i', 's', 'u'),
+  KBTS_SCRIPT_TAG_LYCIAN = KBTS_FOURCC('l', 'y', 'c', 'i'),
+  KBTS_SCRIPT_TAG_LYDIAN = KBTS_FOURCC('l', 'y', 'd', 'i'),
+  KBTS_SCRIPT_TAG_MAHAJANI = KBTS_FOURCC('m', 'a', 'h', 'j'),
+  KBTS_SCRIPT_TAG_MAKASAR = KBTS_FOURCC('m', 'a', 'k', 'a'),
+  KBTS_SCRIPT_TAG_MALAYALAM = KBTS_FOURCC('m', 'l', 'm', '2'),
+  KBTS_SCRIPT_TAG_MANDAIC = KBTS_FOURCC('m', 'a', 'n', 'd'),
+  KBTS_SCRIPT_TAG_MANICHAEAN = KBTS_FOURCC('m', 'a', 'n', 'i'),
+  KBTS_SCRIPT_TAG_MARCHEN = KBTS_FOURCC('m', 'a', 'r', 'c'),
+  KBTS_SCRIPT_TAG_MASARAM_GONDI = KBTS_FOURCC('g', 'o', 'n', 'm'),
+  KBTS_SCRIPT_TAG_MEDEFAIDRIN = KBTS_FOURCC('m', 'e', 'd', 'f'),
+  KBTS_SCRIPT_TAG_MEETEI_MAYEK = KBTS_FOURCC('m', 't', 'e', 'i'),
+  KBTS_SCRIPT_TAG_MENDE_KIKAKUI = KBTS_FOURCC('m', 'e', 'n', 'd'),
+  KBTS_SCRIPT_TAG_MEROITIC_CURSIVE = KBTS_FOURCC('m', 'e', 'r', 'c'),
+  KBTS_SCRIPT_TAG_MEROITIC_HIEROGLYPHS = KBTS_FOURCC('m', 'e', 'r', 'o'),
+  KBTS_SCRIPT_TAG_MIAO = KBTS_FOURCC('p', 'l', 'r', 'd'),
+  KBTS_SCRIPT_TAG_MODI = KBTS_FOURCC('m', 'o', 'd', 'i'),
+  KBTS_SCRIPT_TAG_MONGOLIAN = KBTS_FOURCC('m', 'o', 'n', 'g'),
+  KBTS_SCRIPT_TAG_MRO = KBTS_FOURCC('m', 'r', 'o', 'o'),
+  KBTS_SCRIPT_TAG_MULTANI = KBTS_FOURCC('m', 'u', 'l', 't'),
+  KBTS_SCRIPT_TAG_MYANMAR = KBTS_FOURCC('m', 'y', 'm', '2'),
+  KBTS_SCRIPT_TAG_NABATAEAN = KBTS_FOURCC('n', 'b', 'a', 't'),
+  KBTS_SCRIPT_TAG_NAG_MUNDARI = KBTS_FOURCC('n', 'a', 'g', 'm'),
+  KBTS_SCRIPT_TAG_NANDINAGARI = KBTS_FOURCC('n', 'a', 'n', 'd'),
+  KBTS_SCRIPT_TAG_NEWA = KBTS_FOURCC('n', 'e', 'w', 'a'),
+  KBTS_SCRIPT_TAG_NEW_TAI_LUE = KBTS_FOURCC('t', 'a', 'l', 'u'),
+  KBTS_SCRIPT_TAG_NKO = KBTS_FOURCC('n', 'k', 'o', ' '),
+  KBTS_SCRIPT_TAG_NUSHU = KBTS_FOURCC('n', 's', 'h', 'u'),
+  KBTS_SCRIPT_TAG_NYIAKENG_PUACHUE_HMONG = KBTS_FOURCC('h', 'm', 'n', 'p'),
+  KBTS_SCRIPT_TAG_OGHAM = KBTS_FOURCC('o', 'g', 'a', 'm'),
+  KBTS_SCRIPT_TAG_OL_CHIKI = KBTS_FOURCC('o', 'l', 'c', 'k'),
+  KBTS_SCRIPT_TAG_OL_ONAL = KBTS_FOURCC('o', 'n', 'a', 'o'),
+  KBTS_SCRIPT_TAG_OLD_ITALIC = KBTS_FOURCC('i', 't', 'a', 'l'),
+  KBTS_SCRIPT_TAG_OLD_HUNGARIAN = KBTS_FOURCC('h', 'u', 'n', 'g'),
+  KBTS_SCRIPT_TAG_OLD_NORTH_ARABIAN = KBTS_FOURCC('n', 'a', 'r', 'b'),
+  KBTS_SCRIPT_TAG_OLD_PERMIC = KBTS_FOURCC('p', 'e', 'r', 'm'),
+  KBTS_SCRIPT_TAG_OLD_PERSIAN_CUNEIFORM = KBTS_FOURCC('x', 'p', 'e', 'o'),
+  KBTS_SCRIPT_TAG_OLD_SOGDIAN = KBTS_FOURCC('s', 'o', 'g', 'o'),
+  KBTS_SCRIPT_TAG_OLD_SOUTH_ARABIAN = KBTS_FOURCC('s', 'a', 'r', 'b'),
+  KBTS_SCRIPT_TAG_OLD_TURKIC = KBTS_FOURCC('o', 'r', 'k', 'h'),
+  KBTS_SCRIPT_TAG_OLD_UYGHUR = KBTS_FOURCC('o', 'u', 'g', 'r'),
+  KBTS_SCRIPT_TAG_ODIA = KBTS_FOURCC('o', 'r', 'y', '2'),
+  KBTS_SCRIPT_TAG_OSAGE = KBTS_FOURCC('o', 's', 'g', 'e'),
+  KBTS_SCRIPT_TAG_OSMANYA = KBTS_FOURCC('o', 's', 'm', 'a'),
+  KBTS_SCRIPT_TAG_PAHAWH_HMONG = KBTS_FOURCC('h', 'm', 'n', 'g'),
+  KBTS_SCRIPT_TAG_PALMYRENE = KBTS_FOURCC('p', 'a', 'l', 'm'),
+  KBTS_SCRIPT_TAG_PAU_CIN_HAU = KBTS_FOURCC('p', 'a', 'u', 'c'),
+  KBTS_SCRIPT_TAG_PHAGS_PA = KBTS_FOURCC('p', 'h', 'a', 'g'),
+  KBTS_SCRIPT_TAG_PHOENICIAN = KBTS_FOURCC('p', 'h', 'n', 'x'),
+  KBTS_SCRIPT_TAG_PSALTER_PAHLAVI = KBTS_FOURCC('p', 'h', 'l', 'p'),
+  KBTS_SCRIPT_TAG_REJANG = KBTS_FOURCC('r', 'j', 'n', 'g'),
+  KBTS_SCRIPT_TAG_RUNIC = KBTS_FOURCC('r', 'u', 'n', 'r'),
+  KBTS_SCRIPT_TAG_SAMARITAN = KBTS_FOURCC('s', 'a', 'm', 'r'),
+  KBTS_SCRIPT_TAG_SAURASHTRA = KBTS_FOURCC('s', 'a', 'u', 'r'),
+  KBTS_SCRIPT_TAG_SHARADA = KBTS_FOURCC('s', 'h', 'r', 'd'),
+  KBTS_SCRIPT_TAG_SHAVIAN = KBTS_FOURCC('s', 'h', 'a', 'w'),
+  KBTS_SCRIPT_TAG_SIDDHAM = KBTS_FOURCC('s', 'i', 'd', 'd'),
+  KBTS_SCRIPT_TAG_SIGN_WRITING = KBTS_FOURCC('s', 'g', 'n', 'w'),
+  KBTS_SCRIPT_TAG_SOGDIAN = KBTS_FOURCC('s', 'o', 'g', 'd'),
+  KBTS_SCRIPT_TAG_SINHALA = KBTS_FOURCC('s', 'i', 'n', 'h'),
+  KBTS_SCRIPT_TAG_SORA_SOMPENG = KBTS_FOURCC('s', 'o', 'r', 'a'),
+  KBTS_SCRIPT_TAG_SOYOMBO = KBTS_FOURCC('s', 'o', 'y', 'o'),
+  KBTS_SCRIPT_TAG_SUMERO_AKKADIAN_CUNEIFORM = KBTS_FOURCC('x', 's', 'u', 'x'),
+  KBTS_SCRIPT_TAG_SUNDANESE = KBTS_FOURCC('s', 'u', 'n', 'd'),
+  KBTS_SCRIPT_TAG_SUNUWAR = KBTS_FOURCC('s', 'u', 'n', 'u'),
+  KBTS_SCRIPT_TAG_SYLOTI_NAGRI = KBTS_FOURCC('s', 'y', 'l', 'o'),
+  KBTS_SCRIPT_TAG_SYRIAC = KBTS_FOURCC('s', 'y', 'r', 'c'),
+  KBTS_SCRIPT_TAG_TAGALOG = KBTS_FOURCC('t', 'g', 'l', 'g'),
+  KBTS_SCRIPT_TAG_TAGBANWA = KBTS_FOURCC('t', 'a', 'g', 'b'),
+  KBTS_SCRIPT_TAG_TAI_LE = KBTS_FOURCC('t', 'a', 'l', 'e'),
+  KBTS_SCRIPT_TAG_TAI_THAM = KBTS_FOURCC('l', 'a', 'n', 'a'),
+  KBTS_SCRIPT_TAG_TAI_VIET = KBTS_FOURCC('t', 'a', 'v', 't'),
+  KBTS_SCRIPT_TAG_TAKRI = KBTS_FOURCC('t', 'a', 'k', 'r'),
+  KBTS_SCRIPT_TAG_TAMIL = KBTS_FOURCC('t', 'm', 'l', '2'),
+  KBTS_SCRIPT_TAG_TANGSA = KBTS_FOURCC('t', 'n', 's', 'a'),
+  KBTS_SCRIPT_TAG_TANGUT = KBTS_FOURCC('t', 'a', 'n', 'g'),
+  KBTS_SCRIPT_TAG_TELUGU = KBTS_FOURCC('t', 'e', 'l', '2'),
+  KBTS_SCRIPT_TAG_THAANA = KBTS_FOURCC('t', 'h', 'a', 'a'),
+  KBTS_SCRIPT_TAG_THAI = KBTS_FOURCC('t', 'h', 'a', 'i'),
+  KBTS_SCRIPT_TAG_TIBETAN = KBTS_FOURCC('t', 'i', 'b', 't'),
+  KBTS_SCRIPT_TAG_TIFINAGH = KBTS_FOURCC('t', 'f', 'n', 'g'),
+  KBTS_SCRIPT_TAG_TIRHUTA = KBTS_FOURCC('t', 'i', 'r', 'h'),
+  KBTS_SCRIPT_TAG_TODHRI = KBTS_FOURCC('t', 'o', 'd', 'r'),
+  KBTS_SCRIPT_TAG_TOTO = KBTS_FOURCC('t', 'o', 't', 'o'),
+  KBTS_SCRIPT_TAG_TULU_TIGALARI = KBTS_FOURCC('t', 'u', 't', 'g'),
+  KBTS_SCRIPT_TAG_UGARITIC_CUNEIFORM = KBTS_FOURCC('u', 'g', 'a', 'r'),
+  KBTS_SCRIPT_TAG_VAI = KBTS_FOURCC('v', 'a', 'i', ' '),
+  KBTS_SCRIPT_TAG_VITHKUQI = KBTS_FOURCC('v', 'i', 't', 'h'),
+  KBTS_SCRIPT_TAG_WANCHO = KBTS_FOURCC('w', 'c', 'h', 'o'),
+  KBTS_SCRIPT_TAG_WARANG_CITI = KBTS_FOURCC('w', 'a', 'r', 'a'),
+  KBTS_SCRIPT_TAG_YEZIDI = KBTS_FOURCC('y', 'e', 'z', 'i'),
+  KBTS_SCRIPT_TAG_YI = KBTS_FOURCC('y', 'i', ' ', ' '),
+  KBTS_SCRIPT_TAG_ZANABAZAR_SQUARE = KBTS_FOURCC('z', 'a', 'n', 'b'),
+};
+
 typedef kbts_u32 kbts_script;
-enum kbts_script_enum {
+enum kbts_script_enum
+{
   KBTS_SCRIPT_DONT_KNOW,
   KBTS_SCRIPT_ADLAM,
   KBTS_SCRIPT_AHOM,
@@ -1628,6 +1823,7 @@ enum kbts_script_enum {
 typedef kbts_u32 kbts_feature_tag;
 enum kbts_feature_tag_enum
 {
+  KBTS_FEATURE_TAG_UNREGISTERED = KBTS_FOURCC(0, 0, 0, 0), // Features that aren't pre-defined in the OpenType spec
   KBTS_FEATURE_TAG_isol = KBTS_FOURCC('i', 's', 'o', 'l'), // Isolated Forms
   KBTS_FEATURE_TAG_fina = KBTS_FOURCC('f', 'i', 'n', 'a'), // Terminal Forms
   KBTS_FEATURE_TAG_fin2 = KBTS_FOURCC('f', 'i', 'n', '2'), // Terminal Forms #2
@@ -1877,6 +2073,7 @@ enum kbts_feature_tag_enum
 typedef kbts_u32 kbts_feature_id;
 enum kbts_feature_id_enum
 {
+  KBTS_FEATURE_ID_UNREGISTERED, // Features that aren't pre-defined in the OpenType spec
   KBTS_FEATURE_ID_isol, // Isolated Forms
   KBTS_FEATURE_ID_fina, // Terminal Forms
   KBTS_FEATURE_ID_fin2, // Terminal Forms #2
@@ -2203,6 +2400,7 @@ typedef struct kbts_feature_set
 typedef struct kbts_feature_override
 {
   kbts_feature_id Id;
+  kbts_feature_tag Tag;
   kbts_u32 EnabledOrAlternatePlusOne;
 } kbts_feature_override;
 
@@ -2211,6 +2409,8 @@ typedef struct kbts_glyph_config
   kbts_feature_set EnabledFeatures;
   kbts_feature_set DisabledFeatures;
   kbts_u32 FeatureOverrideCount;
+  kbts_u32 FeatureOverrideCapacity;
+  kbts_u32 RequiredFeatureOverrideCapacity;
   kbts_feature_override *FeatureOverrides; // [FeatureOverrideCount]
 } kbts_glyph_config;
 
@@ -2316,6 +2516,7 @@ typedef union kbts_op_state_op_specific
 
 typedef struct kbts_lookup_indices
 {
+  kbts_u32 FeatureTag;
   kbts_u32 FeatureId;
   kbts_u32 SkipFlags;
   kbts_u32 GlyphFilter;
@@ -2340,6 +2541,8 @@ typedef struct kbts_op_state
 
   kbts_u32 FeatureCount;
   kbts_lookup_indices FeatureLookupIndices[KBTS_MAX_SIMULTANEOUS_FEATURES];
+  kbts_u32 UnregisteredFeatureCount;
+  kbts_feature_tag UnregisteredFeatureTags[KBTS_MAX_SIMULTANEOUS_FEATURES];
 
   kbts_op_state_op_specific OpSpecific;
 
@@ -2528,15 +2731,19 @@ typedef struct kbts_decode
   kbts_u32 Valid;
 } kbts_decode;
 
-// Shaping
 #ifndef KB_TEXT_SHAPE_NO_CRT
-KBTS_EXPORT kbts_feature_override kbts_FeatureOverride(kbts_feature_id Id, int Alternate, kbts_u32 Value);
-KBTS_EXPORT kbts_glyph_config kbts_GlyphConfig(kbts_feature_override *FeatureOverrides, kbts_u32 FeatureOverrideCount);
 KBTS_EXPORT kbts_font kbts_FontFromFile(const char *FileName);
 KBTS_EXPORT void kbts_FreeFont(kbts_font *Font);
 KBTS_EXPORT kbts_shape_state *kbts_CreateShapeState(kbts_font *Font);
 KBTS_EXPORT void kbts_FreeShapeState(kbts_shape_state *State);
 #endif
+KBTS_EXPORT kbts_feature_id kbts_FeatureTagToId(kbts_feature_tag Tag);
+KBTS_EXPORT kbts_feature_override kbts_FeatureOverride(kbts_feature_id Id, int Alternate, kbts_u32 Value);
+KBTS_EXPORT kbts_feature_override kbts_FeatureOverrideFromTag(kbts_feature_tag Tag, int Alternate, kbts_u32 Value);
+KBTS_EXPORT kbts_glyph_config kbts_GlyphConfig(kbts_feature_override *FeatureOverrides, kbts_u32 FeatureOverrideCount);
+KBTS_EXPORT kbts_glyph_config kbts_EmptyGlyphConfig(kbts_feature_override *FeatureOverrides, kbts_u32 FeatureOverrideCapacity);
+KBTS_EXPORT int kbts_GlyphConfigOverrideFeature(kbts_glyph_config *Config, kbts_feature_id Id, int Alternate, kbts_u32 Value);
+KBTS_EXPORT int kbts_GlyphConfigOverrideFeatureFromTag(kbts_glyph_config *Config, kbts_feature_tag Tag, int Alternate, kbts_u32 Value);
 KBTS_EXPORT int kbts_FontIsValid(kbts_font *Font);
 KBTS_EXPORT kbts_un kbts_ReadFontHeader(kbts_font *Font, void *Data, kbts_un Size);
 KBTS_EXPORT kbts_un kbts_ReadFontData(kbts_font *Font, void *Scratch, kbts_un ScratchSize);
@@ -2558,6 +2765,7 @@ KBTS_EXPORT kbts_decode kbts_DecodeUtf8(const char *Utf8, kbts_un Length);
 KBTS_EXPORT kbts_glyph kbts_CodepointToGlyph(kbts_font *Font, kbts_u32 Codepoint);
 KBTS_EXPORT void kbts_InferScript(kbts_direction *Direction, kbts_script *Script, kbts_script GlyphScript);
 KBTS_EXPORT int kbts_ScriptIsComplex(kbts_script Script);
+KBTS_EXPORT kbts_script kbts_ScriptTagToScript(kbts_script_tag Tag);
 #endif
 
 #ifdef KB_TEXT_SHAPE_IMPLEMENTATION
@@ -2655,182 +2863,360 @@ typedef struct kbts_script_properties {
 } kbts_script_properties;
 
 static kbts_script_properties kbts_ScriptProperties[KBTS_SCRIPT_COUNT] = {
-  {KBTS_FOURCC(' ', ' ', ' ', ' '),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('a', 'd', 'l', 'm'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('a', 'h', 'o', 'm'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('h', 'l', 'u', 'w'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('a', 'r', 'a', 'b'),KBTS_SHAPER_ARABIC},
-  {KBTS_FOURCC('a', 'r', 'm', 'n'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('a', 'v', 's', 't'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('b', 'a', 'l', 'i'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('b', 'a', 'm', 'u'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('b', 'a', 's', 's'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('b', 'a', 't', 'k'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('b', 'n', 'g', '2'),KBTS_SHAPER_INDIC},
-  {KBTS_FOURCC('b', 'h', 'k', 's'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('b', 'o', 'p', 'o'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('b', 'r', 'a', 'h'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('b', 'u', 'g', 'i'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('b', 'u', 'h', 'd'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('c', 'a', 'n', 's'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('c', 'a', 'r', 'i'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('a', 'g', 'h', 'b'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('c', 'a', 'k', 'm'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('c', 'h', 'a', 'm'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('c', 'h', 'e', 'r'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('c', 'h', 'r', 's'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('h', 'a', 'n', 'i'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('c', 'o', 'p', 't'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('c', 'p', 'r', 't'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('c', 'p', 'm', 'n'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('c', 'y', 'r', 'l'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('D', 'F', 'L', 'T'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('D', 'F', 'L', 'T'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('d', 's', 'r', 't'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('d', 'e', 'v', '2'),KBTS_SHAPER_INDIC},
-  {KBTS_FOURCC('d', 'i', 'a', 'k'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('d', 'o', 'g', 'r'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('d', 'u', 'p', 'l'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('e', 'g', 'y', 'p'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('e', 'l', 'b', 'a'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('e', 'l', 'y', 'm'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('e', 't', 'h', 'i'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('g', 'a', 'r', 'a'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('g', 'e', 'o', 'r'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('g', 'l', 'a', 'g'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('g', 'o', 't', 'h'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('g', 'r', 'a', 'n'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('g', 'r', 'e', 'k'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('g', 'j', 'r', '2'),KBTS_SHAPER_INDIC},
-  {KBTS_FOURCC('g', 'o', 'n', 'g'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('g', 'u', 'r', '2'),KBTS_SHAPER_INDIC},
-  {KBTS_FOURCC('g', 'u', 'k', 'h'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('h', 'a', 'n', 'g'),KBTS_SHAPER_HANGUL},
-  {KBTS_FOURCC('r', 'o', 'h', 'g'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('h', 'a', 'n', 'o'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('h', 'a', 't', 'r'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('h', 'e', 'b', 'r'),KBTS_SHAPER_HEBREW},
-  {KBTS_FOURCC('k', 'a', 'n', 'a'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('a', 'r', 'm', 'i'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('p', 'h', 'l', 'i'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('p', 'r', 't', 'i'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('j', 'a', 'v', 'a'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('k', 't', 'h', 'i'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('k', 'n', 'd', '2'),KBTS_SHAPER_INDIC},
-  {KBTS_FOURCC('k', 'a', 'n', 'a'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('k', 'a', 'w', 'i'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('k', 'a', 'l', 'i'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('k', 'h', 'a', 'r'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('k', 'i', 't', 's'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('k', 'h', 'm', 'r'),KBTS_SHAPER_KHMER},
-  {KBTS_FOURCC('k', 'h', 'o', 'j'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('s', 'i', 'n', 'd'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('k', 'r', 'a', 'i'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('l', 'a', 'o', ' '),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('l', 'a', 't', 'n'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('l', 'e', 'p', 'c'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('l', 'i', 'm', 'b'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('l', 'i', 'n', 'a'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('l', 'i', 'n', 'b'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('l', 'i', 's', 'u'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('l', 'y', 'c', 'i'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('l', 'y', 'd', 'i'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('m', 'a', 'h', 'j'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('m', 'a', 'k', 'a'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('m', 'l', 'm', '2'),KBTS_SHAPER_INDIC},
-  {KBTS_FOURCC('m', 'a', 'n', 'd'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('m', 'a', 'n', 'i'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('m', 'a', 'r', 'c'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('g', 'o', 'n', 'm'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('m', 'e', 'd', 'f'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('m', 't', 'e', 'i'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('m', 'e', 'n', 'd'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('m', 'e', 'r', 'c'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('m', 'e', 'r', 'o'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('p', 'l', 'r', 'd'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('m', 'o', 'd', 'i'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('m', 'o', 'n', 'g'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('m', 'r', 'o', 'o'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('m', 'u', 'l', 't'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('m', 'y', 'm', '2'),KBTS_SHAPER_MYANMAR},
-  {KBTS_FOURCC('n', 'b', 'a', 't'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('n', 'a', 'g', 'm'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('n', 'a', 'n', 'd'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('n', 'e', 'w', 'a'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('t', 'a', 'l', 'u'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('n', 'k', 'o', ' '),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('n', 's', 'h', 'u'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('h', 'm', 'n', 'p'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('o', 'g', 'a', 'm'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('o', 'l', 'c', 'k'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('o', 'n', 'a', 'o'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('i', 't', 'a', 'l'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('h', 'u', 'n', 'g'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('n', 'a', 'r', 'b'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('p', 'e', 'r', 'm'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('x', 'p', 'e', 'o'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('s', 'o', 'g', 'o'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('s', 'a', 'r', 'b'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('o', 'r', 'k', 'h'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('o', 'u', 'g', 'r'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('o', 'r', 'y', '2'),KBTS_SHAPER_INDIC},
-  {KBTS_FOURCC('o', 's', 'g', 'e'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('o', 's', 'm', 'a'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('h', 'm', 'n', 'g'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('p', 'a', 'l', 'm'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('p', 'a', 'u', 'c'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('p', 'h', 'a', 'g'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('p', 'h', 'n', 'x'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('p', 'h', 'l', 'p'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('r', 'j', 'n', 'g'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('r', 'u', 'n', 'r'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('s', 'a', 'm', 'r'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('s', 'a', 'u', 'r'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('s', 'h', 'r', 'd'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('s', 'h', 'a', 'w'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('s', 'i', 'd', 'd'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('s', 'g', 'n', 'w'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('s', 'o', 'g', 'd'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('s', 'i', 'n', 'h'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('s', 'o', 'r', 'a'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('s', 'o', 'y', 'o'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('x', 's', 'u', 'x'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('s', 'u', 'n', 'd'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('s', 'u', 'n', 'u'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('s', 'y', 'l', 'o'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('s', 'y', 'r', 'c'),KBTS_SHAPER_ARABIC},
-  {KBTS_FOURCC('t', 'g', 'l', 'g'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('t', 'a', 'g', 'b'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('t', 'a', 'l', 'e'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('l', 'a', 'n', 'a'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('t', 'a', 'v', 't'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('t', 'a', 'k', 'r'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('t', 'm', 'l', '2'),KBTS_SHAPER_INDIC},
-  {KBTS_FOURCC('t', 'n', 's', 'a'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('t', 'a', 'n', 'g'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('t', 'e', 'l', '2'),KBTS_SHAPER_INDIC},
-  {KBTS_FOURCC('t', 'h', 'a', 'a'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('t', 'h', 'a', 'i'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('t', 'i', 'b', 't'),KBTS_SHAPER_TIBETAN},
-  {KBTS_FOURCC('t', 'f', 'n', 'g'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('t', 'i', 'r', 'h'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('t', 'o', 'd', 'r'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('t', 'o', 't', 'o'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('t', 'u', 't', 'g'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('u', 'g', 'a', 'r'),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('v', 'a', 'i', ' '),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('v', 'i', 't', 'h'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('w', 'c', 'h', 'o'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('w', 'a', 'r', 'a'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('y', 'e', 'z', 'i'),KBTS_SHAPER_USE},
-  {KBTS_FOURCC('y', 'i', ' ', ' '),KBTS_SHAPER_DEFAULT},
-  {KBTS_FOURCC('z', 'a', 'n', 'b'),KBTS_SHAPER_USE},
+  {KBTS_FOURCC(' ', ' ', ' ', ' '), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('a', 'd', 'l', 'm'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('a', 'h', 'o', 'm'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('h', 'l', 'u', 'w'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('a', 'r', 'a', 'b'), KBTS_SHAPER_ARABIC},
+  {KBTS_FOURCC('a', 'r', 'm', 'n'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('a', 'v', 's', 't'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('b', 'a', 'l', 'i'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('b', 'a', 'm', 'u'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('b', 'a', 's', 's'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('b', 'a', 't', 'k'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('b', 'n', 'g', '2'), KBTS_SHAPER_INDIC},
+  {KBTS_FOURCC('b', 'h', 'k', 's'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('b', 'o', 'p', 'o'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('b', 'r', 'a', 'h'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('b', 'u', 'g', 'i'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('b', 'u', 'h', 'd'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('c', 'a', 'n', 's'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('c', 'a', 'r', 'i'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('a', 'g', 'h', 'b'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('c', 'a', 'k', 'm'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('c', 'h', 'a', 'm'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('c', 'h', 'e', 'r'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('c', 'h', 'r', 's'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('h', 'a', 'n', 'i'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('c', 'o', 'p', 't'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('c', 'p', 'r', 't'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('c', 'p', 'm', 'n'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('c', 'y', 'r', 'l'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('D', 'F', 'L', 'T'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('D', 'F', 'L', 'T'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('d', 's', 'r', 't'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('d', 'e', 'v', '2'), KBTS_SHAPER_INDIC},
+  {KBTS_FOURCC('d', 'i', 'a', 'k'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('d', 'o', 'g', 'r'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('d', 'u', 'p', 'l'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('e', 'g', 'y', 'p'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('e', 'l', 'b', 'a'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('e', 'l', 'y', 'm'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('e', 't', 'h', 'i'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('g', 'a', 'r', 'a'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('g', 'e', 'o', 'r'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('g', 'l', 'a', 'g'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('g', 'o', 't', 'h'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('g', 'r', 'a', 'n'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('g', 'r', 'e', 'k'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('g', 'j', 'r', '2'), KBTS_SHAPER_INDIC},
+  {KBTS_FOURCC('g', 'o', 'n', 'g'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('g', 'u', 'r', '2'), KBTS_SHAPER_INDIC},
+  {KBTS_FOURCC('g', 'u', 'k', 'h'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('h', 'a', 'n', 'g'), KBTS_SHAPER_HANGUL},
+  {KBTS_FOURCC('r', 'o', 'h', 'g'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('h', 'a', 'n', 'o'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('h', 'a', 't', 'r'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('h', 'e', 'b', 'r'), KBTS_SHAPER_HEBREW},
+  {KBTS_FOURCC('k', 'a', 'n', 'a'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('a', 'r', 'm', 'i'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('p', 'h', 'l', 'i'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('p', 'r', 't', 'i'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('j', 'a', 'v', 'a'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('k', 't', 'h', 'i'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('k', 'n', 'd', '2'), KBTS_SHAPER_INDIC},
+  {KBTS_FOURCC('k', 'a', 'n', 'a'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('k', 'a', 'w', 'i'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('k', 'a', 'l', 'i'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('k', 'h', 'a', 'r'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('k', 'i', 't', 's'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('k', 'h', 'm', 'r'), KBTS_SHAPER_KHMER},
+  {KBTS_FOURCC('k', 'h', 'o', 'j'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('s', 'i', 'n', 'd'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('k', 'r', 'a', 'i'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('l', 'a', 'o', ' '), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('l', 'a', 't', 'n'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('l', 'e', 'p', 'c'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('l', 'i', 'm', 'b'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('l', 'i', 'n', 'a'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('l', 'i', 'n', 'b'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('l', 'i', 's', 'u'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('l', 'y', 'c', 'i'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('l', 'y', 'd', 'i'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('m', 'a', 'h', 'j'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('m', 'a', 'k', 'a'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('m', 'l', 'm', '2'), KBTS_SHAPER_INDIC},
+  {KBTS_FOURCC('m', 'a', 'n', 'd'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('m', 'a', 'n', 'i'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('m', 'a', 'r', 'c'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('g', 'o', 'n', 'm'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('m', 'e', 'd', 'f'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('m', 't', 'e', 'i'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('m', 'e', 'n', 'd'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('m', 'e', 'r', 'c'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('m', 'e', 'r', 'o'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('p', 'l', 'r', 'd'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('m', 'o', 'd', 'i'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('m', 'o', 'n', 'g'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('m', 'r', 'o', 'o'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('m', 'u', 'l', 't'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('m', 'y', 'm', '2'), KBTS_SHAPER_MYANMAR},
+  {KBTS_FOURCC('n', 'b', 'a', 't'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('n', 'a', 'g', 'm'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('n', 'a', 'n', 'd'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('n', 'e', 'w', 'a'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('t', 'a', 'l', 'u'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('n', 'k', 'o', ' '), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('n', 's', 'h', 'u'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('h', 'm', 'n', 'p'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('o', 'g', 'a', 'm'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('o', 'l', 'c', 'k'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('o', 'n', 'a', 'o'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('i', 't', 'a', 'l'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('h', 'u', 'n', 'g'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('n', 'a', 'r', 'b'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('p', 'e', 'r', 'm'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('x', 'p', 'e', 'o'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('s', 'o', 'g', 'o'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('s', 'a', 'r', 'b'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('o', 'r', 'k', 'h'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('o', 'u', 'g', 'r'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('o', 'r', 'y', '2'), KBTS_SHAPER_INDIC},
+  {KBTS_FOURCC('o', 's', 'g', 'e'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('o', 's', 'm', 'a'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('h', 'm', 'n', 'g'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('p', 'a', 'l', 'm'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('p', 'a', 'u', 'c'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('p', 'h', 'a', 'g'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('p', 'h', 'n', 'x'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('p', 'h', 'l', 'p'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('r', 'j', 'n', 'g'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('r', 'u', 'n', 'r'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('s', 'a', 'm', 'r'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('s', 'a', 'u', 'r'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('s', 'h', 'r', 'd'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('s', 'h', 'a', 'w'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('s', 'i', 'd', 'd'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('s', 'g', 'n', 'w'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('s', 'o', 'g', 'd'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('s', 'i', 'n', 'h'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('s', 'o', 'r', 'a'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('s', 'o', 'y', 'o'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('x', 's', 'u', 'x'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('s', 'u', 'n', 'd'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('s', 'u', 'n', 'u'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('s', 'y', 'l', 'o'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('s', 'y', 'r', 'c'), KBTS_SHAPER_ARABIC},
+  {KBTS_FOURCC('t', 'g', 'l', 'g'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('t', 'a', 'g', 'b'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('t', 'a', 'l', 'e'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('l', 'a', 'n', 'a'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('t', 'a', 'v', 't'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('t', 'a', 'k', 'r'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('t', 'm', 'l', '2'), KBTS_SHAPER_INDIC},
+  {KBTS_FOURCC('t', 'n', 's', 'a'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('t', 'a', 'n', 'g'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('t', 'e', 'l', '2'), KBTS_SHAPER_INDIC},
+  {KBTS_FOURCC('t', 'h', 'a', 'a'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('t', 'h', 'a', 'i'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('t', 'i', 'b', 't'), KBTS_SHAPER_TIBETAN},
+  {KBTS_FOURCC('t', 'f', 'n', 'g'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('t', 'i', 'r', 'h'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('t', 'o', 'd', 'r'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('t', 'o', 't', 'o'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('t', 'u', 't', 'g'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('u', 'g', 'a', 'r'), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('v', 'a', 'i', ' '), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('v', 'i', 't', 'h'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('w', 'c', 'h', 'o'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('w', 'a', 'r', 'a'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('y', 'e', 'z', 'i'), KBTS_SHAPER_USE},
+  {KBTS_FOURCC('y', 'i', ' ', ' '), KBTS_SHAPER_DEFAULT},
+  {KBTS_FOURCC('z', 'a', 'n', 'b'), KBTS_SHAPER_USE},
 };
 
-static kbts_feature_id kbts_FeatureToId(kbts_feature_tag Feature)
+KBTS_EXPORT kbts_script kbts_ScriptTagToScript(kbts_script_tag Tag)
+{
+  kbts_script Result = 0;
+  switch(Result)
+  {
+  case KBTS_SCRIPT_TAG_DONT_KNOW: Result = KBTS_SCRIPT_DONT_KNOW; break;
+  case KBTS_SCRIPT_TAG_ADLAM: Result = KBTS_SCRIPT_ADLAM; break;
+  case KBTS_SCRIPT_TAG_AHOM: Result = KBTS_SCRIPT_AHOM; break;
+  case KBTS_SCRIPT_TAG_ANATOLIAN_HIEROGLYPHS: Result = KBTS_SCRIPT_ANATOLIAN_HIEROGLYPHS; break;
+  case KBTS_SCRIPT_TAG_ARABIC: Result = KBTS_SCRIPT_ARABIC; break;
+  case KBTS_SCRIPT_TAG_ARMENIAN: Result = KBTS_SCRIPT_ARMENIAN; break;
+  case KBTS_SCRIPT_TAG_AVESTAN: Result = KBTS_SCRIPT_AVESTAN; break;
+  case KBTS_SCRIPT_TAG_BALINESE: Result = KBTS_SCRIPT_BALINESE; break;
+  case KBTS_SCRIPT_TAG_BAMUM: Result = KBTS_SCRIPT_BAMUM; break;
+  case KBTS_SCRIPT_TAG_BASSA_VAH: Result = KBTS_SCRIPT_BASSA_VAH; break;
+  case KBTS_SCRIPT_TAG_BATAK: Result = KBTS_SCRIPT_BATAK; break;
+  case KBTS_SCRIPT_TAG_BENGALI: Result = KBTS_SCRIPT_BENGALI; break;
+  case KBTS_SCRIPT_TAG_BHAIKSUKI: Result = KBTS_SCRIPT_BHAIKSUKI; break;
+  case KBTS_SCRIPT_TAG_BOPOMOFO: Result = KBTS_SCRIPT_BOPOMOFO; break;
+  case KBTS_SCRIPT_TAG_BRAHMI: Result = KBTS_SCRIPT_BRAHMI; break;
+  case KBTS_SCRIPT_TAG_BUGINESE: Result = KBTS_SCRIPT_BUGINESE; break;
+  case KBTS_SCRIPT_TAG_BUHID: Result = KBTS_SCRIPT_BUHID; break;
+  case KBTS_SCRIPT_TAG_CANADIAN_SYLLABICS: Result = KBTS_SCRIPT_CANADIAN_SYLLABICS; break;
+  case KBTS_SCRIPT_TAG_CARIAN: Result = KBTS_SCRIPT_CARIAN; break;
+  case KBTS_SCRIPT_TAG_CAUCASIAN_ALBANIAN: Result = KBTS_SCRIPT_CAUCASIAN_ALBANIAN; break;
+  case KBTS_SCRIPT_TAG_CHAKMA: Result = KBTS_SCRIPT_CHAKMA; break;
+  case KBTS_SCRIPT_TAG_CHAM: Result = KBTS_SCRIPT_CHAM; break;
+  case KBTS_SCRIPT_TAG_CHEROKEE: Result = KBTS_SCRIPT_CHEROKEE; break;
+  case KBTS_SCRIPT_TAG_CHORASMIAN: Result = KBTS_SCRIPT_CHORASMIAN; break;
+  case KBTS_SCRIPT_TAG_CJK_IDEOGRAPHIC: Result = KBTS_SCRIPT_CJK_IDEOGRAPHIC; break;
+  case KBTS_SCRIPT_TAG_COPTIC: Result = KBTS_SCRIPT_COPTIC; break;
+  case KBTS_SCRIPT_TAG_CYPRIOT_SYLLABARY: Result = KBTS_SCRIPT_CYPRIOT_SYLLABARY; break;
+  case KBTS_SCRIPT_TAG_CYPRO_MINOAN: Result = KBTS_SCRIPT_CYPRO_MINOAN; break;
+  case KBTS_SCRIPT_TAG_CYRILLIC: Result = KBTS_SCRIPT_CYRILLIC; break;
+  case KBTS_SCRIPT_TAG_DEFAULT: Result = KBTS_SCRIPT_DEFAULT; break;
+  case KBTS_SCRIPT_TAG_DESERET: Result = KBTS_SCRIPT_DESERET; break;
+  case KBTS_SCRIPT_TAG_DEVANAGARI: Result = KBTS_SCRIPT_DEVANAGARI; break;
+  case KBTS_SCRIPT_TAG_DIVES_AKURU: Result = KBTS_SCRIPT_DIVES_AKURU; break;
+  case KBTS_SCRIPT_TAG_DOGRA: Result = KBTS_SCRIPT_DOGRA; break;
+  case KBTS_SCRIPT_TAG_DUPLOYAN: Result = KBTS_SCRIPT_DUPLOYAN; break;
+  case KBTS_SCRIPT_TAG_EGYPTIAN_HIEROGLYPHS: Result = KBTS_SCRIPT_EGYPTIAN_HIEROGLYPHS; break;
+  case KBTS_SCRIPT_TAG_ELBASAN: Result = KBTS_SCRIPT_ELBASAN; break;
+  case KBTS_SCRIPT_TAG_ELYMAIC: Result = KBTS_SCRIPT_ELYMAIC; break;
+  case KBTS_SCRIPT_TAG_ETHIOPIC: Result = KBTS_SCRIPT_ETHIOPIC; break;
+  case KBTS_SCRIPT_TAG_GARAY: Result = KBTS_SCRIPT_GARAY; break;
+  case KBTS_SCRIPT_TAG_GEORGIAN: Result = KBTS_SCRIPT_GEORGIAN; break;
+  case KBTS_SCRIPT_TAG_GLAGOLITIC: Result = KBTS_SCRIPT_GLAGOLITIC; break;
+  case KBTS_SCRIPT_TAG_GOTHIC: Result = KBTS_SCRIPT_GOTHIC; break;
+  case KBTS_SCRIPT_TAG_GRANTHA: Result = KBTS_SCRIPT_GRANTHA; break;
+  case KBTS_SCRIPT_TAG_GREEK: Result = KBTS_SCRIPT_GREEK; break;
+  case KBTS_SCRIPT_TAG_GUJARATI: Result = KBTS_SCRIPT_GUJARATI; break;
+  case KBTS_SCRIPT_TAG_GUNJALA_GONDI: Result = KBTS_SCRIPT_GUNJALA_GONDI; break;
+  case KBTS_SCRIPT_TAG_GURMUKHI: Result = KBTS_SCRIPT_GURMUKHI; break;
+  case KBTS_SCRIPT_TAG_GURUNG_KHEMA: Result = KBTS_SCRIPT_GURUNG_KHEMA; break;
+  case KBTS_SCRIPT_TAG_HANGUL: Result = KBTS_SCRIPT_HANGUL; break;
+  case KBTS_SCRIPT_TAG_HANIFI_ROHINGYA: Result = KBTS_SCRIPT_HANIFI_ROHINGYA; break;
+  case KBTS_SCRIPT_TAG_HANUNOO: Result = KBTS_SCRIPT_HANUNOO; break;
+  case KBTS_SCRIPT_TAG_HATRAN: Result = KBTS_SCRIPT_HATRAN; break;
+  case KBTS_SCRIPT_TAG_HEBREW: Result = KBTS_SCRIPT_HEBREW; break;
+  case KBTS_SCRIPT_TAG_HIRAGANA: Result = KBTS_SCRIPT_HIRAGANA; break;
+  case KBTS_SCRIPT_TAG_IMPERIAL_ARAMAIC: Result = KBTS_SCRIPT_IMPERIAL_ARAMAIC; break;
+  case KBTS_SCRIPT_TAG_INSCRIPTIONAL_PAHLAVI: Result = KBTS_SCRIPT_INSCRIPTIONAL_PAHLAVI; break;
+  case KBTS_SCRIPT_TAG_INSCRIPTIONAL_PARTHIAN: Result = KBTS_SCRIPT_INSCRIPTIONAL_PARTHIAN; break;
+  case KBTS_SCRIPT_TAG_JAVANESE: Result = KBTS_SCRIPT_JAVANESE; break;
+  case KBTS_SCRIPT_TAG_KAITHI: Result = KBTS_SCRIPT_KAITHI; break;
+  case KBTS_SCRIPT_TAG_KANNADA: Result = KBTS_SCRIPT_KANNADA; break;
+  case KBTS_SCRIPT_TAG_KAWI: Result = KBTS_SCRIPT_KAWI; break;
+  case KBTS_SCRIPT_TAG_KAYAH_LI: Result = KBTS_SCRIPT_KAYAH_LI; break;
+  case KBTS_SCRIPT_TAG_KHAROSHTHI: Result = KBTS_SCRIPT_KHAROSHTHI; break;
+  case KBTS_SCRIPT_TAG_KHITAN_SMALL_SCRIPT: Result = KBTS_SCRIPT_KHITAN_SMALL_SCRIPT; break;
+  case KBTS_SCRIPT_TAG_KHMER: Result = KBTS_SCRIPT_KHMER; break;
+  case KBTS_SCRIPT_TAG_KHOJKI: Result = KBTS_SCRIPT_KHOJKI; break;
+  case KBTS_SCRIPT_TAG_KHUDAWADI: Result = KBTS_SCRIPT_KHUDAWADI; break;
+  case KBTS_SCRIPT_TAG_KIRAT_RAI: Result = KBTS_SCRIPT_KIRAT_RAI; break;
+  case KBTS_SCRIPT_TAG_LAO: Result = KBTS_SCRIPT_LAO; break;
+  case KBTS_SCRIPT_TAG_LATIN: Result = KBTS_SCRIPT_LATIN; break;
+  case KBTS_SCRIPT_TAG_LEPCHA: Result = KBTS_SCRIPT_LEPCHA; break;
+  case KBTS_SCRIPT_TAG_LIMBU: Result = KBTS_SCRIPT_LIMBU; break;
+  case KBTS_SCRIPT_TAG_LINEAR_A: Result = KBTS_SCRIPT_LINEAR_A; break;
+  case KBTS_SCRIPT_TAG_LINEAR_B: Result = KBTS_SCRIPT_LINEAR_B; break;
+  case KBTS_SCRIPT_TAG_LISU: Result = KBTS_SCRIPT_LISU; break;
+  case KBTS_SCRIPT_TAG_LYCIAN: Result = KBTS_SCRIPT_LYCIAN; break;
+  case KBTS_SCRIPT_TAG_LYDIAN: Result = KBTS_SCRIPT_LYDIAN; break;
+  case KBTS_SCRIPT_TAG_MAHAJANI: Result = KBTS_SCRIPT_MAHAJANI; break;
+  case KBTS_SCRIPT_TAG_MAKASAR: Result = KBTS_SCRIPT_MAKASAR; break;
+  case KBTS_SCRIPT_TAG_MALAYALAM: Result = KBTS_SCRIPT_MALAYALAM; break;
+  case KBTS_SCRIPT_TAG_MANDAIC: Result = KBTS_SCRIPT_MANDAIC; break;
+  case KBTS_SCRIPT_TAG_MANICHAEAN: Result = KBTS_SCRIPT_MANICHAEAN; break;
+  case KBTS_SCRIPT_TAG_MARCHEN: Result = KBTS_SCRIPT_MARCHEN; break;
+  case KBTS_SCRIPT_TAG_MASARAM_GONDI: Result = KBTS_SCRIPT_MASARAM_GONDI; break;
+  case KBTS_SCRIPT_TAG_MEDEFAIDRIN: Result = KBTS_SCRIPT_MEDEFAIDRIN; break;
+  case KBTS_SCRIPT_TAG_MEETEI_MAYEK: Result = KBTS_SCRIPT_MEETEI_MAYEK; break;
+  case KBTS_SCRIPT_TAG_MENDE_KIKAKUI: Result = KBTS_SCRIPT_MENDE_KIKAKUI; break;
+  case KBTS_SCRIPT_TAG_MEROITIC_CURSIVE: Result = KBTS_SCRIPT_MEROITIC_CURSIVE; break;
+  case KBTS_SCRIPT_TAG_MEROITIC_HIEROGLYPHS: Result = KBTS_SCRIPT_MEROITIC_HIEROGLYPHS; break;
+  case KBTS_SCRIPT_TAG_MIAO: Result = KBTS_SCRIPT_MIAO; break;
+  case KBTS_SCRIPT_TAG_MODI: Result = KBTS_SCRIPT_MODI; break;
+  case KBTS_SCRIPT_TAG_MONGOLIAN: Result = KBTS_SCRIPT_MONGOLIAN; break;
+  case KBTS_SCRIPT_TAG_MRO: Result = KBTS_SCRIPT_MRO; break;
+  case KBTS_SCRIPT_TAG_MULTANI: Result = KBTS_SCRIPT_MULTANI; break;
+  case KBTS_SCRIPT_TAG_MYANMAR: Result = KBTS_SCRIPT_MYANMAR; break;
+  case KBTS_SCRIPT_TAG_NABATAEAN: Result = KBTS_SCRIPT_NABATAEAN; break;
+  case KBTS_SCRIPT_TAG_NAG_MUNDARI: Result = KBTS_SCRIPT_NAG_MUNDARI; break;
+  case KBTS_SCRIPT_TAG_NANDINAGARI: Result = KBTS_SCRIPT_NANDINAGARI; break;
+  case KBTS_SCRIPT_TAG_NEWA: Result = KBTS_SCRIPT_NEWA; break;
+  case KBTS_SCRIPT_TAG_NEW_TAI_LUE: Result = KBTS_SCRIPT_NEW_TAI_LUE; break;
+  case KBTS_SCRIPT_TAG_NKO: Result = KBTS_SCRIPT_NKO; break;
+  case KBTS_SCRIPT_TAG_NUSHU: Result = KBTS_SCRIPT_NUSHU; break;
+  case KBTS_SCRIPT_TAG_NYIAKENG_PUACHUE_HMONG: Result = KBTS_SCRIPT_NYIAKENG_PUACHUE_HMONG; break;
+  case KBTS_SCRIPT_TAG_OGHAM: Result = KBTS_SCRIPT_OGHAM; break;
+  case KBTS_SCRIPT_TAG_OL_CHIKI: Result = KBTS_SCRIPT_OL_CHIKI; break;
+  case KBTS_SCRIPT_TAG_OL_ONAL: Result = KBTS_SCRIPT_OL_ONAL; break;
+  case KBTS_SCRIPT_TAG_OLD_ITALIC: Result = KBTS_SCRIPT_OLD_ITALIC; break;
+  case KBTS_SCRIPT_TAG_OLD_HUNGARIAN: Result = KBTS_SCRIPT_OLD_HUNGARIAN; break;
+  case KBTS_SCRIPT_TAG_OLD_NORTH_ARABIAN: Result = KBTS_SCRIPT_OLD_NORTH_ARABIAN; break;
+  case KBTS_SCRIPT_TAG_OLD_PERMIC: Result = KBTS_SCRIPT_OLD_PERMIC; break;
+  case KBTS_SCRIPT_TAG_OLD_PERSIAN_CUNEIFORM: Result = KBTS_SCRIPT_OLD_PERSIAN_CUNEIFORM; break;
+  case KBTS_SCRIPT_TAG_OLD_SOGDIAN: Result = KBTS_SCRIPT_OLD_SOGDIAN; break;
+  case KBTS_SCRIPT_TAG_OLD_SOUTH_ARABIAN: Result = KBTS_SCRIPT_OLD_SOUTH_ARABIAN; break;
+  case KBTS_SCRIPT_TAG_OLD_TURKIC: Result = KBTS_SCRIPT_OLD_TURKIC; break;
+  case KBTS_SCRIPT_TAG_OLD_UYGHUR: Result = KBTS_SCRIPT_OLD_UYGHUR; break;
+  case KBTS_SCRIPT_TAG_ODIA: Result = KBTS_SCRIPT_ODIA; break;
+  case KBTS_SCRIPT_TAG_OSAGE: Result = KBTS_SCRIPT_OSAGE; break;
+  case KBTS_SCRIPT_TAG_OSMANYA: Result = KBTS_SCRIPT_OSMANYA; break;
+  case KBTS_SCRIPT_TAG_PAHAWH_HMONG: Result = KBTS_SCRIPT_PAHAWH_HMONG; break;
+  case KBTS_SCRIPT_TAG_PALMYRENE: Result = KBTS_SCRIPT_PALMYRENE; break;
+  case KBTS_SCRIPT_TAG_PAU_CIN_HAU: Result = KBTS_SCRIPT_PAU_CIN_HAU; break;
+  case KBTS_SCRIPT_TAG_PHAGS_PA: Result = KBTS_SCRIPT_PHAGS_PA; break;
+  case KBTS_SCRIPT_TAG_PHOENICIAN: Result = KBTS_SCRIPT_PHOENICIAN; break;
+  case KBTS_SCRIPT_TAG_PSALTER_PAHLAVI: Result = KBTS_SCRIPT_PSALTER_PAHLAVI; break;
+  case KBTS_SCRIPT_TAG_REJANG: Result = KBTS_SCRIPT_REJANG; break;
+  case KBTS_SCRIPT_TAG_RUNIC: Result = KBTS_SCRIPT_RUNIC; break;
+  case KBTS_SCRIPT_TAG_SAMARITAN: Result = KBTS_SCRIPT_SAMARITAN; break;
+  case KBTS_SCRIPT_TAG_SAURASHTRA: Result = KBTS_SCRIPT_SAURASHTRA; break;
+  case KBTS_SCRIPT_TAG_SHARADA: Result = KBTS_SCRIPT_SHARADA; break;
+  case KBTS_SCRIPT_TAG_SHAVIAN: Result = KBTS_SCRIPT_SHAVIAN; break;
+  case KBTS_SCRIPT_TAG_SIDDHAM: Result = KBTS_SCRIPT_SIDDHAM; break;
+  case KBTS_SCRIPT_TAG_SIGN_WRITING: Result = KBTS_SCRIPT_SIGN_WRITING; break;
+  case KBTS_SCRIPT_TAG_SOGDIAN: Result = KBTS_SCRIPT_SOGDIAN; break;
+  case KBTS_SCRIPT_TAG_SINHALA: Result = KBTS_SCRIPT_SINHALA; break;
+  case KBTS_SCRIPT_TAG_SORA_SOMPENG: Result = KBTS_SCRIPT_SORA_SOMPENG; break;
+  case KBTS_SCRIPT_TAG_SOYOMBO: Result = KBTS_SCRIPT_SOYOMBO; break;
+  case KBTS_SCRIPT_TAG_SUMERO_AKKADIAN_CUNEIFORM: Result = KBTS_SCRIPT_SUMERO_AKKADIAN_CUNEIFORM; break;
+  case KBTS_SCRIPT_TAG_SUNDANESE: Result = KBTS_SCRIPT_SUNDANESE; break;
+  case KBTS_SCRIPT_TAG_SUNUWAR: Result = KBTS_SCRIPT_SUNUWAR; break;
+  case KBTS_SCRIPT_TAG_SYLOTI_NAGRI: Result = KBTS_SCRIPT_SYLOTI_NAGRI; break;
+  case KBTS_SCRIPT_TAG_SYRIAC: Result = KBTS_SCRIPT_SYRIAC; break;
+  case KBTS_SCRIPT_TAG_TAGALOG: Result = KBTS_SCRIPT_TAGALOG; break;
+  case KBTS_SCRIPT_TAG_TAGBANWA: Result = KBTS_SCRIPT_TAGBANWA; break;
+  case KBTS_SCRIPT_TAG_TAI_LE: Result = KBTS_SCRIPT_TAI_LE; break;
+  case KBTS_SCRIPT_TAG_TAI_THAM: Result = KBTS_SCRIPT_TAI_THAM; break;
+  case KBTS_SCRIPT_TAG_TAI_VIET: Result = KBTS_SCRIPT_TAI_VIET; break;
+  case KBTS_SCRIPT_TAG_TAKRI: Result = KBTS_SCRIPT_TAKRI; break;
+  case KBTS_SCRIPT_TAG_TAMIL: Result = KBTS_SCRIPT_TAMIL; break;
+  case KBTS_SCRIPT_TAG_TANGSA: Result = KBTS_SCRIPT_TANGSA; break;
+  case KBTS_SCRIPT_TAG_TANGUT: Result = KBTS_SCRIPT_TANGUT; break;
+  case KBTS_SCRIPT_TAG_TELUGU: Result = KBTS_SCRIPT_TELUGU; break;
+  case KBTS_SCRIPT_TAG_THAANA: Result = KBTS_SCRIPT_THAANA; break;
+  case KBTS_SCRIPT_TAG_THAI: Result = KBTS_SCRIPT_THAI; break;
+  case KBTS_SCRIPT_TAG_TIBETAN: Result = KBTS_SCRIPT_TIBETAN; break;
+  case KBTS_SCRIPT_TAG_TIFINAGH: Result = KBTS_SCRIPT_TIFINAGH; break;
+  case KBTS_SCRIPT_TAG_TIRHUTA: Result = KBTS_SCRIPT_TIRHUTA; break;
+  case KBTS_SCRIPT_TAG_TODHRI: Result = KBTS_SCRIPT_TODHRI; break;
+  case KBTS_SCRIPT_TAG_TOTO: Result = KBTS_SCRIPT_TOTO; break;
+  case KBTS_SCRIPT_TAG_TULU_TIGALARI: Result = KBTS_SCRIPT_TULU_TIGALARI; break;
+  case KBTS_SCRIPT_TAG_UGARITIC_CUNEIFORM: Result = KBTS_SCRIPT_UGARITIC_CUNEIFORM; break;
+  case KBTS_SCRIPT_TAG_VAI: Result = KBTS_SCRIPT_VAI; break;
+  case KBTS_SCRIPT_TAG_VITHKUQI: Result = KBTS_SCRIPT_VITHKUQI; break;
+  case KBTS_SCRIPT_TAG_WANCHO: Result = KBTS_SCRIPT_WANCHO; break;
+  case KBTS_SCRIPT_TAG_WARANG_CITI: Result = KBTS_SCRIPT_WARANG_CITI; break;
+  case KBTS_SCRIPT_TAG_YEZIDI: Result = KBTS_SCRIPT_YEZIDI; break;
+  case KBTS_SCRIPT_TAG_YI: Result = KBTS_SCRIPT_YI; break;
+  case KBTS_SCRIPT_TAG_ZANABAZAR_SQUARE: Result = KBTS_SCRIPT_ZANABAZAR_SQUARE; break;
+  default: break;
+  }
+  return Result;
+}
+
+KBTS_EXPORT kbts_feature_id kbts_FeatureTagToId(kbts_feature_tag Tag)
 {
   kbts_feature_id Result = 0;
-  switch(Feature)
+  switch(Tag)
   {
   case KBTS_FEATURE_TAG_isol: Result = KBTS_FEATURE_ID_isol; break;
   case KBTS_FEATURE_TAG_fina: Result = KBTS_FEATURE_ID_fina; break;
@@ -3078,8 +3464,9 @@ static kbts_feature_id kbts_FeatureToId(kbts_feature_tag Feature)
   case KBTS_FEATURE_TAG_zero: Result = KBTS_FEATURE_ID_zero; break;
   default: break;
   }
-return Result;
+  return Result;
 }
+
 static kbts_s32 kbts_UnicodeParentDeltas[1679] = {
   132,133,134,135,244,246,248,250,252,254,315,351,416,418,7678,7680,7682,7792,7794,132,133,134,135,275,277,279,281,283,285,346,382,447,
   449,7709,7711,7713,7823,7825,131,132,133,134,174,176,178,180,182,416,418,452,7604,7606,7764,7766,7768,131,132,133,134,205,207,209,211,213,
@@ -12511,10 +12898,12 @@ static void kbts_AddFeature(kbts_feature_set *Set, kbts_feature_id Id)
   Set->Flags[WordIndex] |= 1ull << BitIndex;
 }
 
-KBTS_EXPORT kbts_feature_override kbts_FeatureOverride(kbts_feature_id Id, int Alternate, kbts_u32 Value)
+static kbts_feature_override kbts_FeatureOverrideBase(kbts_feature_id Id, kbts_feature_tag Tag, int Alternate, kbts_u32 Value)
 {
   kbts_feature_override Result = KBTS_ZERO;
   Result.Id = Id;
+  Result.Tag = Tag;
+
   if(Alternate)
   {
     Result.EnabledOrAlternatePlusOne = Value + 1;
@@ -12523,6 +12912,17 @@ KBTS_EXPORT kbts_feature_override kbts_FeatureOverride(kbts_feature_id Id, int A
   {
     Result.EnabledOrAlternatePlusOne = Value;
   }
+
+  return Result;
+}
+KBTS_EXPORT kbts_feature_override kbts_FeatureOverrideFromTag(kbts_feature_tag Tag, int Alternate, kbts_u32 Value)
+{
+  kbts_feature_override Result = kbts_FeatureOverrideBase(kbts_FeatureTagToId(Tag), Tag, Alternate, Value);
+  return Result;
+}
+KBTS_EXPORT kbts_feature_override kbts_FeatureOverride(kbts_feature_id Id, int Alternate, kbts_u32 Value)
+{
+  kbts_feature_override Result = kbts_FeatureOverrideBase(Id, 0, Alternate, Value);
   return Result;
 }
 
@@ -12545,6 +12945,47 @@ KBTS_EXPORT kbts_glyph_config kbts_GlyphConfig(kbts_feature_override *FeatureOve
     }
   }
 
+  return Result;
+}
+
+KBTS_EXPORT kbts_glyph_config kbts_EmptyGlyphConfig(kbts_feature_override *FeatureOverrides, kbts_u32 FeatureOverrideCapacity)
+{
+  kbts_glyph_config Result = KBTS_ZERO;
+  Result.FeatureOverrides = FeatureOverrides;
+  Result.FeatureOverrideCapacity = FeatureOverrideCapacity;
+  return Result;
+}
+
+static int kbts_GlyphConfigOverrideFeatureBase(kbts_glyph_config *Config, kbts_feature_id Id, kbts_feature_tag Tag, int Alternate, kbts_u32 Value)
+{
+  kbts_feature_set *Set = &Config->EnabledFeatures;
+  if(!Value)
+  {
+    Set = &Config->DisabledFeatures;
+  }
+  kbts_AddFeature(Set, Id);
+
+  if(!Id || Alternate)
+  {
+    if(Config->FeatureOverrideCount < Config->FeatureOverrideCapacity)
+    {
+      kbts_feature_override Override = kbts_FeatureOverrideFromTag(Tag, Alternate, Value);
+      Config->FeatureOverrides[Config->FeatureOverrideCount++] = Override;
+    }
+    Config->RequiredFeatureOverrideCapacity += 1;
+  }
+
+  int Result = Config->RequiredFeatureOverrideCapacity <= Config->FeatureOverrideCapacity;
+  return Result;
+}
+KBTS_EXPORT int kbts_GlyphConfigOverrideFeature(kbts_glyph_config *Config, kbts_feature_id Id, int Alternate, kbts_u32 Value)
+{
+  int Result = kbts_GlyphConfigOverrideFeatureBase(Config, Id, 0, Alternate, Value);
+  return Result;
+}
+KBTS_EXPORT int kbts_GlyphConfigOverrideFeatureFromTag(kbts_glyph_config *Config, kbts_feature_tag Tag, int Alternate, kbts_u32 Value)
+{
+  int Result = kbts_GlyphConfigOverrideFeatureBase(Config, kbts_FeatureTagToId(Tag), Tag, Alternate, Value);
   return Result;
 }
 
@@ -13739,13 +14180,6 @@ static kbts_class_sequence_rule *kbts_GetClassSequenceRule(kbts_class_sequence_r
   return Result;
 }
 
-static kbts_coverage *kbts_GetCoverage(kbts_sequence_context_3 *Context, kbts_un Index)
-{
-  kbts_u16 *Offsets = (kbts_u16 *)(Context + 1);
-  kbts_coverage *Result = KBTS_POINTER_OFFSET(kbts_coverage, Context, Offsets[Index]);
-  return Result;
-}
-
 static kbts_chained_sequence_rule_set *kbts_GetChainedSequenceRuleSet(kbts_chained_sequence_context_1 *Context, kbts_un Index)
 {
   kbts_u16 *Offsets = (kbts_u16 *)(Context + 1);
@@ -13775,6 +14209,7 @@ static kbts_chained_sequence_rule *kbts_GetChainedClassSequenceRule(kbts_chained
   return Result;
 }
 
+#if 0 // @Incomplete
 static kbts_feature_variation_pointer kbts_GetFeatureVariation(kbts_feature_variations *Variations, kbts_un Index)
 {
   kbts_feature_variation_record *Records = (kbts_feature_variation_record *)(Variations + 1);
@@ -13803,6 +14238,7 @@ static kbts_feature_substitution_pointer kbts_GetFeatureSubstitution(kbts_featur
   Result.AlternateFeature = KBTS_POINTER_OFFSET(kbts_feature, Table, Record->AlternateFeatureOffset);
   return Result;
 }
+#endif
 
 static kbts_cmap_subtable_pointer kbts_GetCmapSubtable(kbts_cmap *Cmap, kbts_un Index)
 {
@@ -15777,13 +16213,15 @@ static kbts_u32 kbts_NextFeature(kbts_iterate_features *It)
 
       It->FeatureIndex += 1;
 
-      kbts_u32 FeatureId = kbts_FeatureToId(Feature.Tag);
-      kbts_u64 FeatureFlag = (FeatureId < 32) ? (1ull << FeatureId) : 0;
-      if(kbts_ContainsFeature(&It->EnabledFeatures, kbts_FeatureToId(Feature.Tag)))
+      kbts_u32 FeatureId = kbts_FeatureTagToId(Feature.Tag);
+      if(kbts_ContainsFeature(&It->EnabledFeatures, FeatureId))
       {
         It->Feature = Feature.Feature;
         It->CurrentFeatureTag = Feature.Tag;
-        It->CurrentFeatureFlag = FeatureFlag & KBTS_GLYPH_FEATURE_MASK;
+        if(FeatureId && (FeatureId <= 32))
+        {
+          It->CurrentFeatureFlag = (1 << (FeatureId - 1)) & KBTS_GLYPH_FEATURE_MASK;
+        }
         Result = 1;
 
         break;
@@ -15863,9 +16301,8 @@ static kbts_feature_set kbts_ShaperFeatures[] = {
                              KBTS_FEATURE_FLAG0(curs),
                              0,
                              KBTS_FEATURE_FLAG2(rlig) | KBTS_FEATURE_FLAG2(liga) | KBTS_FEATURE_FLAG2(rclt) | KBTS_FEATURE_FLAG2(mark) |
-                             KBTS_FEATURE_FLAG2(mkmk) | KBTS_FEATURE_FLAG2(dist) | KBTS_FEATURE_FLAG2(kern) | KBTS_FEATURE_FLAG2(rtla) |
-                             KBTS_FEATURE_FLAG2(locl),
-                             KBTS_FEATURE_FLAG3(rvrn) | KBTS_FEATURE_FLAG3(rtlm) | KBTS_FEATURE_FLAG3(stch)}},
+                             KBTS_FEATURE_FLAG2(mkmk) | KBTS_FEATURE_FLAG2(dist) | KBTS_FEATURE_FLAG2(kern) | KBTS_FEATURE_FLAG2(locl),
+                             KBTS_FEATURE_FLAG3(rvrn) | KBTS_FEATURE_FLAG3(rtlm) | KBTS_FEATURE_FLAG3(stch) | KBTS_FEATURE_FLAG3(rtla)}},
   /* KBTS_SHAPER_HANGUL */ {{KBTS_FEATURE_FLAG0(frac) | KBTS_FEATURE_FLAG0(numr) | KBTS_FEATURE_FLAG0(dnom) | KBTS_FEATURE_FLAG0(ljmo) |
                              KBTS_FEATURE_FLAG0(vjmo) | KBTS_FEATURE_FLAG0(tjmo) | KBTS_FEATURE_FLAG0(abvm) | KBTS_FEATURE_FLAG0(blwm) |
                              KBTS_FEATURE_FLAG0(ccmp) | KBTS_FEATURE_FLAG0(clig) | KBTS_FEATURE_FLAG0(curs),
@@ -16290,19 +16727,21 @@ static void kbts_BeginFeatures(kbts_op_state *State, kbts_shape_config *Config, 
       //  }
       //}
 
-      kbts_u32 FeatureId = kbts_FeatureToId(Feature.Tag);
+      kbts_u32 FeatureId = kbts_FeatureTagToId(Feature.Tag);
       if(Feature.Feature->LookupIndexCount && kbts_ContainsFeature(&EnabledFeatures, FeatureId))
       {
         kbts_lookup_indices LookupIndices = KBTS_ZERO;
+        LookupIndices.FeatureTag = Feature.Tag;
         LookupIndices.FeatureId = FeatureId;
         LookupIndices.SkipFlags = kbts_SkipFlags(FeatureId, Config->Shaper);
         // For Myanmar, we could try and tag glyphs depending on their Indic properties in BeginCluster, just like we do for
         // Indic scripts.
         // However, Harfbuzz does _not_ do this, so it seems like a bunch of work that would, at best, make us diverge from
         // Harfbuzz more often.
-        if(Config->Shaper != KBTS_SHAPER_MYANMAR)
+        if((Config->Shaper != KBTS_SHAPER_MYANMAR) && (FeatureId >= 1) && (FeatureId <= 32))
         {
-          LookupIndices.GlyphFilter = (FeatureId < 32) ? (1 << FeatureId) & KBTS_GLYPH_FEATURE_MASK : 0;
+          // These must properly map KBTS_FEATURE_ID to kbts_glyph_flags!
+          LookupIndices.GlyphFilter = (1 << (FeatureId - 1)) & KBTS_GLYPH_FEATURE_MASK;
         }
         LookupIndices.Count = Feature.Feature->LookupIndexCount;
         LookupIndices.Indices = KBTS_POINTER_AFTER(kbts_u16, Feature.Feature);
@@ -17679,8 +18118,26 @@ static kbts_substitution_result_flags kbts_DoSubstitution(kbts_shape_state *Shap
 
                       if(EnabledOrAlternatePlusOne && kbts_ContainsFeature(&Gsub->LookupFeatures, Override->Id))
                       {
-                        AlternateIndex = EnabledOrAlternatePlusOne - 1;
-                        break;
+                        int Match = 1;
+                        if(!Override->Id)
+                        {
+                          // Slow path for unregistered features.
+                          Match = 0;
+                          KBTS_FOR(UnregisteredFeatureIndex, 0, ShapeState->OpState.UnregisteredFeatureCount)
+                          {
+                            if(Override->Tag == ShapeState->OpState.UnregisteredFeatureTags[UnregisteredFeatureIndex])
+                            {
+                              Match = 1;
+                              break;
+                            }
+                          }
+                        }
+
+                        if(Match)
+                        {
+                          AlternateIndex = EnabledOrAlternatePlusOne - 1;
+                          break;
+                        }
                       }
                     }
                   }
@@ -17902,7 +18359,6 @@ Cleanup:;
 static kbts_u32 kbts_WouldSubstitute(kbts_shape_state *ShapeState, kbts_lookup_list *LookupList, kbts_gsub_frame *Frames, kbts_feature *Feature, kbts_skip_flags SkipFlags, kbts_glyph *Glyphs, kbts_un GlyphCount)
 {
   kbts_u32 Result = 0;
-  kbts_u32 DummyGlyphCount = (kbts_u32)GlyphCount;
   kbts_glyph_array GlyphArray = kbts_GlyphArray(Glyphs, GlyphCount, GlyphCount, GlyphCount);
 
   kbts_iterate_lookups IterateLookups = kbts_IterateLookups(LookupList, Feature);
@@ -17954,6 +18410,7 @@ static int kbts_NextLookupIndex(kbts_op_state *S, kbts_un *LookupIndex, kbts_u32
   kbts_feature_set FeatureSet = KBTS_ZERO;
   kbts_skip_flags SkipFlags = 0;
   kbts_u32 GlyphFilter = 0;
+  kbts_un UnregisteredFeatureCount = 0;
   KBTS_FOR(FeatureIndex, 0, S->FeatureCount)
   {
     kbts_lookup_indices *Indices = &S->FeatureLookupIndices[FeatureIndex];
@@ -17963,6 +18420,12 @@ static int kbts_NextLookupIndex(kbts_op_state *S, kbts_un *LookupIndex, kbts_u32
       SkipFlags |= Indices->SkipFlags;
       GlyphFilter |= Indices->GlyphFilter;
       kbts_AddFeature(&FeatureSet, Indices->FeatureId);
+
+      if(!Indices->FeatureId && (UnregisteredFeatureCount < KBTS_MAX_SIMULTANEOUS_FEATURES))
+      {
+        S->UnregisteredFeatureTags[UnregisteredFeatureCount++] = Indices->FeatureTag;
+      }
+
       ++Indices->Indices; --Indices->Count;
       if(!Indices->Count)
       {
@@ -17971,6 +18434,7 @@ static int kbts_NextLookupIndex(kbts_op_state *S, kbts_un *LookupIndex, kbts_u32
     }
   }
 
+  S->UnregisteredFeatureCount = (kbts_u32)UnregisteredFeatureCount;
   *LookupIndex = LowestIndex;
   *SkipFlags_ = SkipFlags;
   *GlyphFilter_ = GlyphFilter;
@@ -17978,7 +18442,7 @@ static int kbts_NextLookupIndex(kbts_op_state *S, kbts_un *LookupIndex, kbts_u32
   return LowestIndex != 0xFFFFFFFF;
 }
 
-static int kbts_ConfigAllowsFeatures(kbts_shape_config *Config, kbts_glyph_config *GlyphConfig, kbts_feature_set *Features)
+static int kbts_ConfigAllowsFeatures(kbts_op_state *S, kbts_shape_config *Config, kbts_glyph_config *GlyphConfig, kbts_feature_set *Features)
 {
   kbts_glyph_config DummyGlyphConfig = KBTS_ZERO;
   kbts_u64 UserEnabled = 0; // Whether the user enabled _any_ feature corresponding to this lookup.
@@ -17990,15 +18454,38 @@ static int kbts_ConfigAllowsFeatures(kbts_shape_config *Config, kbts_glyph_confi
     GlyphConfig = &DummyGlyphConfig;
   }
 
+  kbts_u64 Mask = 1; // Ignore unregistered features in the broad pass.
   KBTS_FOR(WordIndex, 0, KBTS_ARRAY_LENGTH(GlyphConfig->EnabledFeatures.Flags))
   {
-    kbts_u64 LookupFeatureFlags = Features->Flags[WordIndex];
+    kbts_u64 LookupFeatureFlags = Features->Flags[WordIndex] & ~Mask;
+    Mask = 0;
 
     UserEnabled |= GlyphConfig->EnabledFeatures.Flags[WordIndex] & LookupFeatureFlags;
     UserDisabled &= (GlyphConfig->DisabledFeatures.Flags[WordIndex] & LookupFeatureFlags) == LookupFeatureFlags;
     DefaultEnabled |= Features->Flags[WordIndex] & Config->Features->Flags[WordIndex];
   }
 
+  if(Features->Flags[0] & (GlyphConfig->EnabledFeatures.Flags[0] | GlyphConfig->DisabledFeatures.Flags[0]) & KBTS_FEATURE_FLAG0(UNREGISTERED))
+  {
+    // Slow path for unregistered features.
+    KBTS_FOR(FeatureOverrideIndex, 0, GlyphConfig->FeatureOverrideCount)
+    {
+      kbts_feature_override *Override = &GlyphConfig->FeatureOverrides[FeatureOverrideIndex];
+      if(Override->Id == KBTS_FEATURE_ID_UNREGISTERED)
+      {
+        kbts_feature_tag OverrideTag = Override->Tag;
+        KBTS_FOR(UnregisteredFeatureIndex, 0, S->UnregisteredFeatureCount)
+        {
+          if(OverrideTag == S->UnregisteredFeatureTags[UnregisteredFeatureIndex])
+          {
+            UserEnabled |= Override->EnabledOrAlternatePlusOne;
+            UserDisabled &= !Override->EnabledOrAlternatePlusOne;
+            break;
+          }
+        }
+      }
+    }
+  }
   int Result = (!UserDisabled && (DefaultEnabled || UserEnabled));
   return Result;
 }
@@ -18842,7 +19329,7 @@ static kbts_u32 kbts_ExecuteOp(kbts_shape_state *ShapeState, kbts_glyph_array *G
 
         if(kbts_GlyphIncludedInLookup(Config->Font, 0, Gsub->LookupIndex, CurrentGlyph->Id) &&
            ((CurrentGlyph->Flags & EffectiveGlyphFilter) == EffectiveGlyphFilter) &&
-           kbts_ConfigAllowsFeatures(Config, CurrentGlyph->Config, &LookupFeatures))
+           kbts_ConfigAllowsFeatures(S, Config, CurrentGlyph->Config, &LookupFeatures))
         {
           S->FrameCount = 0;
 
@@ -19045,7 +19532,7 @@ static kbts_u32 kbts_ExecuteOp(kbts_shape_state *ShapeState, kbts_glyph_array *G
         kbts_un DeltaGlyphIndex = 1;
 
         if(kbts_GlyphIncludedInLookup(Config->Font, 1, LookupIndex, GlyphArray->Glyphs[PositionedGlyphCount].Id) &&
-           kbts_ConfigAllowsFeatures(Config, Glyphs[PositionedGlyphCount].Config, &LookupFeatures))
+           kbts_ConfigAllowsFeatures(S, Config, Glyphs[PositionedGlyphCount].Config, &LookupFeatures))
         {
           KBTS_FOR(SubtableIndex, 0, Lookup.SubtableCount)
           {
@@ -19283,8 +19770,6 @@ static kbts_glyph kbts_Substitute1(kbts_shape_state *ShapeState, kbts_lookup_lis
     Frames[0].InputGlyphCount = 1;
     kbts_u32 FrameCount = 1;
 
-    kbts_u32 GlyphCount = 1;
-
     while(FrameCount)
     {
       kbts_substitution_result_flags SubstitutionResult = kbts_DoSubstitution(ShapeState, LookupList, Frames, &FrameCount, &GlyphArray, 0, SkipFlags, 0);
@@ -19385,7 +19870,6 @@ static kbts_begin_cluster_result kbts_BeginCluster(kbts_shape_state *ShapeState,
 
       kbts_gsub_frame *Frames = KBTS_POINTER_AFTER(kbts_gsub_frame, OpState);
       kbts_glyph *OnePastLastSyllableGlyph = Glyphs + ScanGlyphIndex;
-      kbts_script Script = ShapeState->Config->Script;
 
       if((Config->Script == KBTS_SCRIPT_KANNADA) && (ScanGlyphIndex >= 3) && (Glyphs[0].SyllabicClass == KBTS_INDIC_SYLLABIC_CLASS_RA) &&
          (Glyphs[1].SyllabicClass == KBTS_INDIC_SYLLABIC_CLASS_HALANT) && (Glyphs[2].SyllabicClass == KBTS_INDIC_SYLLABIC_CLASS_ZWJ))
@@ -19470,8 +19954,6 @@ static kbts_begin_cluster_result kbts_BeginCluster(kbts_shape_state *ShapeState,
         Scratch[0] = Config->Virama;
         Scratch[2] = Config->Virama;
 
-        kbts_feature *Pstf = Config->Pstf;
-        kbts_feature *Blwf = Config->Blwf;
         kbts_feature *Locl = Config->Locl;
         kbts_feature *Vatu = Config->Vatu;
 
@@ -21299,7 +21781,6 @@ KBTS_EXPORT kbts_un kbts_ReadFontHeader(kbts_font *Font, void *Data, kbts_un Siz
           {
             // We do not do any bounds checking here because Gsub/Gpos tables get byteswapped later on,
             // in ByteSwapGsubGposCommon.
-            kbts_gsub_gpos *GsubGpos = (kbts_gsub_gpos *)TableBase;
             kbts_un Index = (Table->Tag == KBTS_FOURCC('G', 'S', 'U', 'B')) ? KBTS_SHAPING_TABLE_GSUB : KBTS_SHAPING_TABLE_GPOS;
             Font->ShapingTables[Index] = (kbts_gsub_gpos *)TableBase;
             ShapingTableSizes[Index] = Table->Length;
