@@ -13739,12 +13739,12 @@ static kbts_class_sequence_rule *kbts_GetClassSequenceRule(kbts_class_sequence_r
   return Result;
 }
 
-static kbts_coverage *kbts_GetCoverage(kbts_sequence_context_3 *Context, kbts_un Index)
-{
-  kbts_u16 *Offsets = (kbts_u16 *)(Context + 1);
-  kbts_coverage *Result = KBTS_POINTER_OFFSET(kbts_coverage, Context, Offsets[Index]);
-  return Result;
-}
+// static kbts_coverage *kbts_GetCoverage(kbts_sequence_context_3 *Context, kbts_un Index)
+// {
+//   kbts_u16 *Offsets = (kbts_u16 *)(Context + 1);
+//   kbts_coverage *Result = KBTS_POINTER_OFFSET(kbts_coverage, Context, Offsets[Index]);
+//   return Result;
+// }
 
 static kbts_chained_sequence_rule_set *kbts_GetChainedSequenceRuleSet(kbts_chained_sequence_context_1 *Context, kbts_un Index)
 {
@@ -13775,34 +13775,34 @@ static kbts_chained_sequence_rule *kbts_GetChainedClassSequenceRule(kbts_chained
   return Result;
 }
 
-static kbts_feature_variation_pointer kbts_GetFeatureVariation(kbts_feature_variations *Variations, kbts_un Index)
-{
-  kbts_feature_variation_record *Records = (kbts_feature_variation_record *)(Variations + 1);
-  kbts_feature_variation_record *Record = &Records[Index];
+// static kbts_feature_variation_pointer kbts_GetFeatureVariation(kbts_feature_variations *Variations, kbts_un Index)
+// {
+//   kbts_feature_variation_record *Records = (kbts_feature_variation_record *)(Variations + 1);
+//   kbts_feature_variation_record *Record = &Records[Index];
 
-  kbts_feature_variation_pointer Result;
-  Result.ConditionSet = KBTS_POINTER_OFFSET(kbts_condition_set, Variations, Record->ConditionSetOffset);
-  Result.FeatureTableSubstitution = KBTS_POINTER_OFFSET(kbts_feature_table_substitution, Variations, Record->FeatureTableSubstitutionOffset);
-  return Result;
-}
+//   kbts_feature_variation_pointer Result;
+//   Result.ConditionSet = KBTS_POINTER_OFFSET(kbts_condition_set, Variations, Record->ConditionSetOffset);
+//   Result.FeatureTableSubstitution = KBTS_POINTER_OFFSET(kbts_feature_table_substitution, Variations, Record->FeatureTableSubstitutionOffset);
+//   return Result;
+// }
 
-static kbts_condition_1 *kbts_GetCondition(kbts_condition_set *Set, kbts_un Index)
-{
-  kbts_u32 *Offsets = (kbts_u32 *)(Set + 1);
-  kbts_condition_1 *Result = KBTS_POINTER_OFFSET(kbts_condition_1, Set, Offsets[Index]);
-  return Result;
-}
+// static kbts_condition_1 *kbts_GetCondition(kbts_condition_set *Set, kbts_un Index)
+// {
+//   kbts_u32 *Offsets = (kbts_u32 *)(Set + 1);
+//   kbts_condition_1 *Result = KBTS_POINTER_OFFSET(kbts_condition_1, Set, Offsets[Index]);
+//   return Result;
+// }
 
-static kbts_feature_substitution_pointer kbts_GetFeatureSubstitution(kbts_feature_table_substitution *Table, kbts_un Index)
-{
-  kbts_feature_table_substitution_record *Records = (kbts_feature_table_substitution_record *)(Table + 1);
-  kbts_feature_table_substitution_record *Record = &Records[Index];
+// static kbts_feature_substitution_pointer kbts_GetFeatureSubstitution(kbts_feature_table_substitution *Table, kbts_un Index)
+// {
+//   kbts_feature_table_substitution_record *Records = (kbts_feature_table_substitution_record *)(Table + 1);
+//   kbts_feature_table_substitution_record *Record = &Records[Index];
 
-  kbts_feature_substitution_pointer Result;
-  Result.SubstitutedFeatureIndex = Record->FeatureIndex;
-  Result.AlternateFeature = KBTS_POINTER_OFFSET(kbts_feature, Table, Record->AlternateFeatureOffset);
-  return Result;
-}
+//   kbts_feature_substitution_pointer Result;
+//   Result.SubstitutedFeatureIndex = Record->FeatureIndex;
+//   Result.AlternateFeature = KBTS_POINTER_OFFSET(kbts_feature, Table, Record->AlternateFeatureOffset);
+//   return Result;
+// }
 
 static kbts_cmap_subtable_pointer kbts_GetCmapSubtable(kbts_cmap *Cmap, kbts_un Index)
 {
@@ -17902,7 +17902,6 @@ Cleanup:;
 static kbts_u32 kbts_WouldSubstitute(kbts_shape_state *ShapeState, kbts_lookup_list *LookupList, kbts_gsub_frame *Frames, kbts_feature *Feature, kbts_skip_flags SkipFlags, kbts_glyph *Glyphs, kbts_un GlyphCount)
 {
   kbts_u32 Result = 0;
-  kbts_u32 DummyGlyphCount = (kbts_u32)GlyphCount;
   kbts_glyph_array GlyphArray = kbts_GlyphArray(Glyphs, GlyphCount, GlyphCount, GlyphCount);
 
   kbts_iterate_lookups IterateLookups = kbts_IterateLookups(LookupList, Feature);
@@ -19283,8 +19282,6 @@ static kbts_glyph kbts_Substitute1(kbts_shape_state *ShapeState, kbts_lookup_lis
     Frames[0].InputGlyphCount = 1;
     kbts_u32 FrameCount = 1;
 
-    kbts_u32 GlyphCount = 1;
-
     while(FrameCount)
     {
       kbts_substitution_result_flags SubstitutionResult = kbts_DoSubstitution(ShapeState, LookupList, Frames, &FrameCount, &GlyphArray, 0, SkipFlags, 0);
@@ -19385,7 +19382,6 @@ static kbts_begin_cluster_result kbts_BeginCluster(kbts_shape_state *ShapeState,
 
       kbts_gsub_frame *Frames = KBTS_POINTER_AFTER(kbts_gsub_frame, OpState);
       kbts_glyph *OnePastLastSyllableGlyph = Glyphs + ScanGlyphIndex;
-      kbts_script Script = ShapeState->Config->Script;
 
       if((Config->Script == KBTS_SCRIPT_KANNADA) && (ScanGlyphIndex >= 3) && (Glyphs[0].SyllabicClass == KBTS_INDIC_SYLLABIC_CLASS_RA) &&
          (Glyphs[1].SyllabicClass == KBTS_INDIC_SYLLABIC_CLASS_HALANT) && (Glyphs[2].SyllabicClass == KBTS_INDIC_SYLLABIC_CLASS_ZWJ))
@@ -19476,7 +19472,7 @@ static kbts_begin_cluster_result kbts_BeginCluster(kbts_shape_state *ShapeState,
         kbts_feature *Vatu = Config->Vatu;
 
         // pstf forms come last, then blwf.
-        kbts_feature *SectionFeature = Config->Pstf;
+        kbts_feature *SectionFeature = Pstf;
         kbts_syllabic_position SectionPosition = KBTS_SYLLABIC_POSITION_POSTBASE_CONSONANT;
         // If we see no consonant/matra, then surely we want to attach to the base.
         kbts_syllabic_position SyllabicPosition = KBTS_SYLLABIC_POSITION_SYLLABLE_BASE;
@@ -19521,7 +19517,7 @@ static kbts_begin_cluster_result kbts_BeginCluster(kbts_shape_state *ShapeState,
                 }
                 else if(SectionPosition == KBTS_SYLLABIC_POSITION_POSTBASE_CONSONANT)
                 {
-                  SectionFeature = Config->Blwf;
+                  SectionFeature = Blwf;
                   SectionPosition = KBTS_SYLLABIC_POSITION_BELOWBASE_CONSONANT;
                   // Retry with Blwf.
                 }
@@ -21299,7 +21295,6 @@ KBTS_EXPORT kbts_un kbts_ReadFontHeader(kbts_font *Font, void *Data, kbts_un Siz
           {
             // We do not do any bounds checking here because Gsub/Gpos tables get byteswapped later on,
             // in ByteSwapGsubGposCommon.
-            kbts_gsub_gpos *GsubGpos = (kbts_gsub_gpos *)TableBase;
             kbts_un Index = (Table->Tag == KBTS_FOURCC('G', 'S', 'U', 'B')) ? KBTS_SHAPING_TABLE_GSUB : KBTS_SHAPING_TABLE_GPOS;
             Font->ShapingTables[Index] = (kbts_gsub_gpos *)TableBase;
             ShapingTableSizes[Index] = Table->Length;
