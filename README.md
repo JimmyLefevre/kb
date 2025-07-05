@@ -17,7 +17,9 @@
 
 [kb\_text\_shape.h](./kb_text_shape.h) provides ICU-like text segmentation (i.e. breaking Unicode text by direction, line, word and grapheme). It also provides Harfbuzz-like text shaping for OpenType fonts, which means it is capable of handling complex script layout and ligatures, among other things.
 
-It does **not** handle rasterization. It will only help you know which glyphs to display where!
+It does **not** handle rasterization. It does **not** handle paragraph layout. It will only help you know which glyphs to display where on a single, infinitely-long line!
+
+(See https://www.newroadoldway.com/text1.html for an explanation of the different steps of text processing.)
 
 ```c
 static kbts_font GlobalFont;
