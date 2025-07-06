@@ -18522,10 +18522,12 @@ static kbts_u32 kbts_ExecuteOp(kbts_shape_state *ShapeState, kbts_glyph_array *G
     // These sequences are from IndicShapingInvalidClusters.txt.
     S->GlyphIndex = 0;
 
-    kbts_u64 Codepoints = 0; // 0xABBBBBCCCCCDDDDD
+    kbts_u64 Codepoints;
+    Codepoints = 0; // 0xABBBBBCCCCCDDDDD
     for(; S->GlyphIndex < GlyphArray->Count; ++S->GlyphIndex)
     {
-      kbts_u32 NewCodepoint = Glyphs[S->GlyphIndex].Codepoint & 0x1FFFFF;
+      kbts_u32 NewCodepoint;
+      NewCodepoint = Glyphs[S->GlyphIndex].Codepoint & 0x1FFFFF;
       Codepoints = (Codepoints << 21) | NewCodepoint;
 
       // This switch is faster than any table lookup I could come up with in my tests.
@@ -18672,7 +18674,8 @@ static kbts_u32 kbts_ExecuteOp(kbts_shape_state *ShapeState, kbts_glyph_array *G
     // myanmar: HB_OT_SHAPE_NORMALIZATION_MODE_COMPOSED_DIACRITICS_NO_SHORT_CIRCUIT,
     // use:     HB_OT_SHAPE_NORMALIZATION_MODE_COMPOSED_DIACRITICS_NO_SHORT_CIRCUIT,
 
-    kbts_glyph *DecompositionGlyphs = KBTS_POINTER_AFTER(kbts_glyph, S);
+    kbts_glyph *DecompositionGlyphs;
+    DecompositionGlyphs = KBTS_POINTER_AFTER(kbts_glyph, S);
 
     { // Full NFD decomposition
       for(S->GlyphIndex = 0; S->GlyphIndex < GlyphArray->Count; ++S->GlyphIndex)
@@ -19066,7 +19069,8 @@ static kbts_u32 kbts_ExecuteOp(kbts_shape_state *ShapeState, kbts_glyph_array *G
     else if((Config->Script == KBTS_SCRIPT_THAI) || (Config->Script == KBTS_SCRIPT_LAO))
     {
       // Decompose sara/sala ams.
-      kbts_un AboveBaseGlyphCount = 0;
+      kbts_un AboveBaseGlyphCount;
+      AboveBaseGlyphCount = 0;
       for(S->GlyphIndex = 0; S->GlyphIndex < S->WrittenCount; ++S->GlyphIndex)
       {
         ResumePoint5:;
@@ -19124,13 +19128,18 @@ static kbts_u32 kbts_ExecuteOp(kbts_shape_state *ShapeState, kbts_glyph_array *G
     S->GlyphIndex = 0;
     while(S->GlyphIndex < GlyphArray->Count)
     {
-      kbts_glyph *Glyph = &Glyphs[S->GlyphIndex];
+      kbts_glyph *Glyph;
+      Glyph = &Glyphs[S->GlyphIndex];
 
-      kbts_un L = 0;
-      kbts_un V = 0;
-      kbts_un T = 0;
+      kbts_un L;
+      kbts_un V;
+      kbts_un T;
+      L = 0;
+      V = 0;
+      T = 0;
 
-      kbts_hangul_syllable_info LInfo = kbts_HangulSyllableInfo(Glyph->Codepoint);
+      kbts_hangul_syllable_info LInfo;
+      LInfo = kbts_HangulSyllableInfo(Glyph->Codepoint);
       if(LInfo.Type >= KBTS_HANGUL_SYLLABLE_TYPE_LV)
       {
         kbts_un SIndex = (Glyph->Codepoint - 0xAC00);
@@ -19151,7 +19160,8 @@ static kbts_u32 kbts_ExecuteOp(kbts_shape_state *ShapeState, kbts_glyph_array *G
 
       S->GlyphIndex += 1;
 
-      kbts_op_state_normalize_hangul *NormalizeHangul = &S->OpSpecific.NormalizeHangul;
+      kbts_op_state_normalize_hangul *NormalizeHangul;
+      NormalizeHangul = &S->OpSpecific.NormalizeHangul;
 
       if(L)
       {
@@ -19294,14 +19304,19 @@ static kbts_u32 kbts_ExecuteOp(kbts_shape_state *ShapeState, kbts_glyph_array *G
   case KBTS_OP_KIND_GSUB_FEATURES:
   {
     KBTS_INSTRUMENT_BLOCK_BEGIN("GSUB_FEATURES")
-    kbts_gsub_gpos *FontGsub = Font->ShapingTables[KBTS_SHAPING_TABLE_GSUB];
-    kbts_lookup_list *LookupList = kbts_GetLookupList(FontGsub);
-    kbts_gsub_frame *Frames = KBTS_POINTER_AFTER(kbts_gsub_frame, S);
-    kbts_op_state_gsub *Gsub = &S->OpSpecific.Gsub;
+    kbts_gsub_gpos *FontGsub;
+    kbts_lookup_list *LookupList;
+    kbts_gsub_frame *Frames;
+    kbts_op_state_gsub *Gsub;
+    FontGsub = Font->ShapingTables[KBTS_SHAPING_TABLE_GSUB];
+    LookupList = kbts_GetLookupList(FontGsub);
+    Frames = KBTS_POINTER_AFTER(kbts_gsub_frame, S);
+    Gsub = &S->OpSpecific.Gsub;
 
     kbts_BeginFeatures(S, Config, KBTS_SHAPING_TABLE_GSUB, Op->Features);
     kbts_u32 GlyphFilter;
-    kbts_skip_flags SkipFlags = 0;
+    kbts_skip_flags SkipFlags;
+    SkipFlags = 0;
     kbts_feature_set LookupFeatures;
     while(kbts_NextLookupIndex(S, &Gsub->LookupIndex, &SkipFlags, &GlyphFilter, &LookupFeatures))
     {
@@ -19317,15 +19332,20 @@ static kbts_u32 kbts_ExecuteOp(kbts_shape_state *ShapeState, kbts_glyph_array *G
       while(S->GlyphIndex < GlyphArray->Count)
       {
         Frames[0].InputGlyphCount = 1;
-        kbts_u32 FilterMask = Config->Shaper == KBTS_SHAPER_USE ? KBTS_USE_GLYPH_FEATURE_MASK : KBTS_GLYPH_FEATURE_MASK;
-        kbts_u32 EffectiveGlyphFilter = GlyphFilter & FilterMask;
+        kbts_u32 FilterMask;
+        kbts_u32 EffectiveGlyphFilter;
+        FilterMask = Config->Shaper == KBTS_SHAPER_USE ? KBTS_USE_GLYPH_FEATURE_MASK : KBTS_GLYPH_FEATURE_MASK;
+        EffectiveGlyphFilter = GlyphFilter & FilterMask;
 
         // Reverse chaining substitutions are tricky.
         // See the comment at :ReverseChaining.
         // @Duplication: We just copy the top-level mirroring logic from DoSubstitution here for now.
-        kbts_lookup *Lookup = kbts_GetLookup(LookupList, Gsub->LookupIndex);
-        kbts_un CurrentGlyphIndex = (Lookup->Type == 8) ? GlyphArray->Count - 1 - S->GlyphIndex : S->GlyphIndex;
-        kbts_glyph *CurrentGlyph = &Glyphs[CurrentGlyphIndex];
+        kbts_lookup *Lookup;
+        kbts_un CurrentGlyphIndex;
+        kbts_glyph *CurrentGlyph;
+        Lookup = kbts_GetLookup(LookupList, Gsub->LookupIndex);
+        CurrentGlyphIndex = (Lookup->Type == 8) ? GlyphArray->Count - 1 - S->GlyphIndex : S->GlyphIndex;
+        CurrentGlyph = &Glyphs[CurrentGlyphIndex];
 
         if(kbts_GlyphIncludedInLookup(Config->Font, 0, Gsub->LookupIndex, CurrentGlyph->Id) &&
            ((CurrentGlyph->Flags & EffectiveGlyphFilter) == EffectiveGlyphFilter) &&
@@ -21384,14 +21404,16 @@ KBTS_EXPORT int kbts_Shape(kbts_shape_state *State, kbts_shape_config *Config, k
         }
       }
 
-      kbts_begin_cluster_result BeginClusterResult = kbts_BeginCluster(State, Glyphs + State->At, GlyphArray->Count - State->At);
+      kbts_begin_cluster_result BeginClusterResult;
+      BeginClusterResult = kbts_BeginCluster(State, Glyphs + State->At, GlyphArray->Count - State->At);
       GlyphArray->Count += BeginClusterResult.InsertedGlyphCount;
       GlyphArray->TotalCount += BeginClusterResult.InsertedGlyphCount;
       State->ClusterGlyphCount = (kbts_u32)BeginClusterResult.ClusterGlyphCount;
 
       *Cluster = kbts_GlyphArray(Glyphs + State->At, BeginClusterResult.ClusterGlyphCount, GlyphArray->Count - State->At, GlyphCapacity - State->At);
 
-      kbts_glyph *LastGlyphInCluster = &Glyphs[State->At + Cluster->Count - 1];
+      kbts_glyph *LastGlyphInCluster;
+      LastGlyphInCluster = &Glyphs[State->At + Cluster->Count - 1];
       State->WordBreak = !(LastGlyphInCluster->UnicodeFlags & KBTS_UNICODE_FLAG_PART_OF_WORD);
 
       for(State->Ip = 0; State->Ip < Config->OpLists[1].Length;)
@@ -21405,7 +21427,8 @@ KBTS_EXPORT int kbts_Shape(kbts_shape_state *State, kbts_shape_config *Config, k
         }
       }
 
-      kbts_end_cluster_result EndClusterResult = kbts_EndCluster(State, Cluster);
+      kbts_end_cluster_result EndClusterResult;
+      EndClusterResult = kbts_EndCluster(State, Cluster);
       if(EndClusterResult.InsertDottedCircle)
       {
         State->DottedCircleInsertIndex = (kbts_u32)EndClusterResult.DottedCircleIndex;
@@ -23666,7 +23689,8 @@ static void kbts_BreakAddCodepoint_(kbts_break_state *State, kbts_u32 Codepoint,
     #undef KBTS_LINE_BREAK
     #undef KBTS_LINE_UNBREAK
 
-    kbts_u64 EffectiveLineBreaks = LineBreaks & ~(LineUnbreaks | LineUnbreaksAsync);
+    kbts_u64 EffectiveLineBreaks;
+    EffectiveLineBreaks = LineBreaks & ~(LineUnbreaks | LineUnbreaksAsync);
 
     kbts_DoLineBreak(State, PositionOffset3 + LineBreak3PositionOffset, EffectiveLineBreaks >> 48, 0, 0);
     if(EndOfText)
