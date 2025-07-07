@@ -18498,6 +18498,7 @@ static kbts_u32 kbts_ExecuteOp(kbts_shape_state *ShapeState, kbts_glyph_array *G
   kbts_op *Op = &ShapeState->Op;
   kbts_op_state *S = &ShapeState->OpState;
   kbts_glyph *Glyphs = GlyphArray->Glyphs;
+  kbts_op_state_normalize_hangul *NormalizeHangul = &S->OpSpecific.NormalizeHangul;
 
   kbts_u32 ResumePoint = S->ResumePoint;
   S->ResumePoint = 0;
@@ -18521,11 +18522,10 @@ static kbts_u32 kbts_ExecuteOp(kbts_shape_state *ShapeState, kbts_glyph_array *G
     // The USE spec gives us a list of codepoint sequences which necessitate insertion of a dotted circle.
     // These sequences are from IndicShapingInvalidClusters.txt.
     S->GlyphIndex = 0;
-
-    kbts_u64 Codepoints = 0; // 0xABBBBBCCCCCDDDDD
+    kbts_u64 Codepoints; Codepoints = 0; // 0xABBBBBCCCCCDDDDD
     for(; S->GlyphIndex < GlyphArray->Count; ++S->GlyphIndex)
     {
-      kbts_u32 NewCodepoint = Glyphs[S->GlyphIndex].Codepoint & 0x1FFFFF;
+      kbts_u32 NewCodepoint; NewCodepoint = Glyphs[S->GlyphIndex].Codepoint & 0x1FFFFF;
       Codepoints = (Codepoints << 21) | NewCodepoint;
 
       // This switch is faster than any table lookup I could come up with in my tests.
@@ -18672,9 +18672,8 @@ static kbts_u32 kbts_ExecuteOp(kbts_shape_state *ShapeState, kbts_glyph_array *G
     // myanmar: HB_OT_SHAPE_NORMALIZATION_MODE_COMPOSED_DIACRITICS_NO_SHORT_CIRCUIT,
     // use:     HB_OT_SHAPE_NORMALIZATION_MODE_COMPOSED_DIACRITICS_NO_SHORT_CIRCUIT,
 
-    kbts_glyph *DecompositionGlyphs = KBTS_POINTER_AFTER(kbts_glyph, S);
-
     { // Full NFD decomposition
+      kbts_glyph *DecompositionGlyphs; DecompositionGlyphs = KBTS_POINTER_AFTER(kbts_glyph, S);
       for(S->GlyphIndex = 0; S->GlyphIndex < GlyphArray->Count; ++S->GlyphIndex)
       {
         DecompositionGlyphs[0] = Glyphs[S->GlyphIndex];
@@ -19066,10 +19065,14 @@ static kbts_u32 kbts_ExecuteOp(kbts_shape_state *ShapeState, kbts_glyph_array *G
     else if((Config->Script == KBTS_SCRIPT_THAI) || (Config->Script == KBTS_SCRIPT_LAO))
     {
       // Decompose sara/sala ams.
-      kbts_un AboveBaseGlyphCount = 0;
+      kbts_un AboveBaseGlyphCount; AboveBaseGlyphCount = 0;
       for(S->GlyphIndex = 0; S->GlyphIndex < S->WrittenCount; ++S->GlyphIndex)
       {
-        ResumePoint5:;
+        if(0)
+        {
+          ResumePoint5:;
+          AboveBaseGlyphCount = S->OpSpecific.Normalize.AboveBaseGlyphCount;
+        }
         kbts_glyph *Glyph = &Glyphs[S->GlyphIndex];
         kbts_u32 Codepoint = Glyph->Codepoint;
 
@@ -19124,145 +19127,144 @@ static kbts_u32 kbts_ExecuteOp(kbts_shape_state *ShapeState, kbts_glyph_array *G
     S->GlyphIndex = 0;
     while(S->GlyphIndex < GlyphArray->Count)
     {
-      kbts_glyph *Glyph = &Glyphs[S->GlyphIndex];
-
-      kbts_un L = 0;
-      kbts_un V = 0;
-      kbts_un T = 0;
-
-      kbts_hangul_syllable_info LInfo = kbts_HangulSyllableInfo(Glyph->Codepoint);
-      if(LInfo.Type >= KBTS_HANGUL_SYLLABLE_TYPE_LV)
       {
-        kbts_un SIndex = (Glyph->Codepoint - 0xAC00);
+        kbts_glyph *Glyph = &Glyphs[S->GlyphIndex];
+        kbts_un L = 0;
+        kbts_un V = 0;
+        kbts_un T = 0;
 
-        L = 0x1100 + SIndex / 588;
-        V = 0x1161 + (SIndex % 588) / 28;
-
-        kbts_un TIndex = SIndex % 28;
-        if(TIndex)
+        kbts_hangul_syllable_info LInfo = kbts_HangulSyllableInfo(Glyph->Codepoint);
+        if(LInfo.Type >= KBTS_HANGUL_SYLLABLE_TYPE_LV)
         {
-          T = 0x11A7 + TIndex;
-        }
-      }
-      else if(LInfo.Type == KBTS_HANGUL_SYLLABLE_TYPE_L)
-      {
-        L = Glyph->Codepoint;
-      }
+          kbts_un SIndex = (Glyph->Codepoint - 0xAC00);
 
-      S->GlyphIndex += 1;
+          L = 0x1100 + SIndex / 588;
+          V = 0x1161 + (SIndex % 588) / 28;
 
-      kbts_op_state_normalize_hangul *NormalizeHangul = &S->OpSpecific.NormalizeHangul;
-
-      if(L)
-      {
-        kbts_hangul_syllable_info VInfo = KBTS_ZERO;
-
-        if(!V && (S->GlyphIndex < GlyphArray->Count))
-        {
-          kbts_u32 VCodepoint = Glyphs[S->GlyphIndex].Codepoint;
-
-          VInfo = kbts_HangulSyllableInfo(VCodepoint);
-
-          if(VInfo.Type == KBTS_HANGUL_SYLLABLE_TYPE_V)
+          kbts_un TIndex = SIndex % 28;
+          if(TIndex)
           {
-            V = VCodepoint;
-
-            S->GlyphIndex += 1;
+            T = 0x11A7 + TIndex;
           }
         }
-
-        if(V)
+        else if(LInfo.Type == KBTS_HANGUL_SYLLABLE_TYPE_L)
         {
-          kbts_hangul_syllable_info TInfo = KBTS_ZERO;
+          L = Glyph->Codepoint;
+        }
 
-          if(!T && (S->GlyphIndex < GlyphArray->Count))
+        S->GlyphIndex += 1;
+
+        if(L)
+        {
+          kbts_hangul_syllable_info VInfo = KBTS_ZERO;
+
+          if(!V && (S->GlyphIndex < GlyphArray->Count))
           {
-            kbts_u32 TCodepoint = Glyphs[S->GlyphIndex].Codepoint;
+            kbts_u32 VCodepoint = Glyphs[S->GlyphIndex].Codepoint;
 
-            TInfo = kbts_HangulSyllableInfo(TCodepoint);
+            VInfo = kbts_HangulSyllableInfo(VCodepoint);
 
-            if(TInfo.Type == KBTS_HANGUL_SYLLABLE_TYPE_T)
+            if(VInfo.Type == KBTS_HANGUL_SYLLABLE_TYPE_V)
             {
-              T = TCodepoint;
+              V = VCodepoint;
 
               S->GlyphIndex += 1;
             }
           }
 
-          NormalizeHangul->LvtGlyphCount = 0;
-
-          // Check for any tone marks that we need to swap to the front of the syllable.
-          // The OpenType shaping documents say that we need to do this after applying GSUB features, but
-          // harfbuzz does it before, so it's probably fine to do it here?
-          // It's also basically free to do here, which is nice.
-          if(S->GlyphIndex < GlyphArray->Count)
+          if(V)
           {
-            kbts_u32 ToneMarkCodepoint = Glyphs[S->GlyphIndex].Codepoint;
+            kbts_hangul_syllable_info TInfo = KBTS_ZERO;
 
-            if((ToneMarkCodepoint >= 0x302E) && (ToneMarkCodepoint <= 0x302F))
+            if(!T && (S->GlyphIndex < GlyphArray->Count))
             {
-              NormalizeHangul->LvtGlyphs[NormalizeHangul->LvtGlyphCount++] = kbts_CodepointToGlyph(Font, ToneMarkCodepoint);
+              kbts_u32 TCodepoint = Glyphs[S->GlyphIndex].Codepoint;
 
-              S->GlyphIndex += 1;
-            }
-          }
+              TInfo = kbts_HangulSyllableInfo(TCodepoint);
 
-          if(LInfo.Composable & VInfo.Composable & TInfo.Composable)
-          {
-            // Try LVT.
-            kbts_un LvtCodepoint = 0xAC00 + (L - 0x1100) * 588 + (V - 0x1161) * 28 + (T - 0x11A7);
+              if(TInfo.Type == KBTS_HANGUL_SYLLABLE_TYPE_T)
+              {
+                T = TCodepoint;
 
-            kbts_glyph LvtGlyph = kbts_CodepointToGlyph(Font, (kbts_u32)LvtCodepoint);
-            if(LvtGlyph.Id)
-            {
-              NormalizeHangul->LvtGlyphs[NormalizeHangul->LvtGlyphCount++] = LvtGlyph;
-            }
-          }
-
-          if(!NormalizeHangul->LvtGlyphCount)
-          {
-            kbts_glyph LvGlyph = {0};
-            if(LInfo.Composable & VInfo.Composable)
-            {
-              // Try LV.
-              kbts_un LvCodepoint = 0xAC00 + (L - 0x1100) * 588 + (V - 0x1161) * 28;
-
-              LvGlyph = kbts_CodepointToGlyph(Font, (kbts_u32)LvCodepoint);
+                S->GlyphIndex += 1;
+              }
             }
 
-            if(LvGlyph.Id)
+            NormalizeHangul->LvtGlyphCount = 0;
+
+            // Check for any tone marks that we need to swap to the front of the syllable.
+            // The OpenType shaping documents say that we need to do this after applying GSUB features, but
+            // harfbuzz does it before, so it's probably fine to do it here?
+            // It's also basically free to do here, which is nice.
+            if(S->GlyphIndex < GlyphArray->Count)
             {
-              NormalizeHangul->LvtGlyphs[NormalizeHangul->LvtGlyphCount++] = LvGlyph;
+              kbts_u32 ToneMarkCodepoint = Glyphs[S->GlyphIndex].Codepoint;
+
+              if((ToneMarkCodepoint >= 0x302E) && (ToneMarkCodepoint <= 0x302F))
+              {
+                NormalizeHangul->LvtGlyphs[NormalizeHangul->LvtGlyphCount++] = kbts_CodepointToGlyph(Font, ToneMarkCodepoint);
+
+                S->GlyphIndex += 1;
+              }
             }
-            else
+
+            if(LInfo.Composable & VInfo.Composable & TInfo.Composable)
             {
-              // Do L-V.
-              kbts_glyph LGlyph = kbts_CodepointToGlyph(Font, (kbts_u32)L);
-              LGlyph.Flags |= KBTS_GLYPH_FLAG_LJMO;
+              // Try LVT.
+              kbts_un LvtCodepoint = 0xAC00 + (L - 0x1100) * 588 + (V - 0x1161) * 28 + (T - 0x11A7);
 
-              kbts_glyph VGlyph = kbts_CodepointToGlyph(Font, (kbts_u32)V);
-              VGlyph.Flags |= KBTS_GLYPH_FLAG_VJMO;
-
-              NormalizeHangul->LvtGlyphs[NormalizeHangul->LvtGlyphCount++] = LGlyph;
-              NormalizeHangul->LvtGlyphs[NormalizeHangul->LvtGlyphCount++] = VGlyph;
+              kbts_glyph LvtGlyph = kbts_CodepointToGlyph(Font, (kbts_u32)LvtCodepoint);
+              if(LvtGlyph.Id)
+              {
+                NormalizeHangul->LvtGlyphs[NormalizeHangul->LvtGlyphCount++] = LvtGlyph;
+              }
             }
 
-            if(T)
+            if(!NormalizeHangul->LvtGlyphCount)
             {
-              kbts_glyph TGlyph = kbts_CodepointToGlyph(Font, (kbts_u32)T);
-              TGlyph.Flags |= KBTS_GLYPH_FLAG_TJMO;
+              kbts_glyph LvGlyph = KBTS_ZERO;
+              if(LInfo.Composable & VInfo.Composable)
+              {
+                // Try LV.
+                kbts_un LvCodepoint = 0xAC00 + (L - 0x1100) * 588 + (V - 0x1161) * 28;
 
-              NormalizeHangul->LvtGlyphs[NormalizeHangul->LvtGlyphCount++] = TGlyph;
+                LvGlyph = kbts_CodepointToGlyph(Font, (kbts_u32)LvCodepoint);
+              }
+
+              if(LvGlyph.Id)
+              {
+                NormalizeHangul->LvtGlyphs[NormalizeHangul->LvtGlyphCount++] = LvGlyph;
+              }
+              else
+              {
+                // Do L-V.
+                kbts_glyph LGlyph = kbts_CodepointToGlyph(Font, (kbts_u32)L);
+                LGlyph.Flags |= KBTS_GLYPH_FLAG_LJMO;
+
+                kbts_glyph VGlyph = kbts_CodepointToGlyph(Font, (kbts_u32)V);
+                VGlyph.Flags |= KBTS_GLYPH_FLAG_VJMO;
+
+                NormalizeHangul->LvtGlyphs[NormalizeHangul->LvtGlyphCount++] = LGlyph;
+                NormalizeHangul->LvtGlyphs[NormalizeHangul->LvtGlyphCount++] = VGlyph;
+              }
+
+              if(T)
+              {
+                kbts_glyph TGlyph = kbts_CodepointToGlyph(Font, (kbts_u32)T);
+                TGlyph.Flags |= KBTS_GLYPH_FLAG_TJMO;
+
+                NormalizeHangul->LvtGlyphs[NormalizeHangul->LvtGlyphCount++] = TGlyph;
+              }
             }
           }
         }
-      }
 
-      if(!NormalizeHangul->LvtGlyphCount)
-      {
-        kbts_glyph NewGlyph = kbts_CodepointToGlyph(Font, Glyph->Codepoint);
+        if(!NormalizeHangul->LvtGlyphCount)
+        {
+          kbts_glyph NewGlyph = kbts_CodepointToGlyph(Font, Glyph->Codepoint);
 
-        NormalizeHangul->LvtGlyphs[NormalizeHangul->LvtGlyphCount++] = NewGlyph;
+          NormalizeHangul->LvtGlyphs[NormalizeHangul->LvtGlyphCount++] = NewGlyph;
+        }
       }
 
       { // Insert the LVT glyphs.
@@ -19294,15 +19296,16 @@ static kbts_u32 kbts_ExecuteOp(kbts_shape_state *ShapeState, kbts_glyph_array *G
   case KBTS_OP_KIND_GSUB_FEATURES:
   {
     KBTS_INSTRUMENT_BLOCK_BEGIN("GSUB_FEATURES")
-    kbts_gsub_gpos *FontGsub = Font->ShapingTables[KBTS_SHAPING_TABLE_GSUB];
-    kbts_lookup_list *LookupList = kbts_GetLookupList(FontGsub);
-    kbts_gsub_frame *Frames = KBTS_POINTER_AFTER(kbts_gsub_frame, S);
-    kbts_op_state_gsub *Gsub = &S->OpSpecific.Gsub;
+
+    kbts_gsub_gpos *FontGsub; FontGsub = Font->ShapingTables[KBTS_SHAPING_TABLE_GSUB];
+    kbts_lookup_list *LookupList; LookupList = kbts_GetLookupList(FontGsub);
+    kbts_gsub_frame *Frames; Frames = KBTS_POINTER_AFTER(kbts_gsub_frame, S);
+    kbts_op_state_gsub *Gsub; Gsub = &S->OpSpecific.Gsub;
+    kbts_u32 GlyphFilter;
+    kbts_skip_flags SkipFlags;
+    kbts_feature_set LookupFeatures;
 
     kbts_BeginFeatures(S, Config, KBTS_SHAPING_TABLE_GSUB, Op->Features);
-    kbts_u32 GlyphFilter;
-    kbts_skip_flags SkipFlags = 0;
-    kbts_feature_set LookupFeatures;
     while(kbts_NextLookupIndex(S, &Gsub->LookupIndex, &SkipFlags, &GlyphFilter, &LookupFeatures))
     {
       Gsub->LookupFeatures = LookupFeatures;
@@ -19317,56 +19320,56 @@ static kbts_u32 kbts_ExecuteOp(kbts_shape_state *ShapeState, kbts_glyph_array *G
       while(S->GlyphIndex < GlyphArray->Count)
       {
         Frames[0].InputGlyphCount = 1;
-        kbts_u32 FilterMask = Config->Shaper == KBTS_SHAPER_USE ? KBTS_USE_GLYPH_FEATURE_MASK : KBTS_GLYPH_FEATURE_MASK;
-        kbts_u32 EffectiveGlyphFilter = GlyphFilter & FilterMask;
 
-        // Reverse chaining substitutions are tricky.
-        // See the comment at :ReverseChaining.
-        // @Duplication: We just copy the top-level mirroring logic from DoSubstitution here for now.
-        kbts_lookup *Lookup = kbts_GetLookup(LookupList, Gsub->LookupIndex);
-        kbts_un CurrentGlyphIndex = (Lookup->Type == 8) ? GlyphArray->Count - 1 - S->GlyphIndex : S->GlyphIndex;
-        kbts_glyph *CurrentGlyph = &Glyphs[CurrentGlyphIndex];
-
-        if(kbts_GlyphIncludedInLookup(Config->Font, 0, Gsub->LookupIndex, CurrentGlyph->Id) &&
-           ((CurrentGlyph->Flags & EffectiveGlyphFilter) == EffectiveGlyphFilter) &&
-           kbts_ConfigAllowsFeatures(S, Config, CurrentGlyph->Config, &LookupFeatures))
         {
-          S->FrameCount = 0;
+          kbts_u32 FilterMask = Config->Shaper == KBTS_SHAPER_USE ? KBTS_USE_GLYPH_FEATURE_MASK : KBTS_GLYPH_FEATURE_MASK;
+          kbts_u32 EffectiveGlyphFilter = GlyphFilter & FilterMask;
 
+          // Reverse chaining substitutions are tricky.
+          // See the comment at :ReverseChaining.
+          // @Duplication: We just copy the top-level mirroring logic from DoSubstitution here for now.
+          kbts_lookup *Lookup = kbts_GetLookup(LookupList, Gsub->LookupIndex);
+          kbts_un CurrentGlyphIndex = (Lookup->Type == 8) ? GlyphArray->Count - 1 - S->GlyphIndex : S->GlyphIndex;
+          kbts_glyph *CurrentGlyph = &Glyphs[CurrentGlyphIndex];
+
+          if(kbts_GlyphIncludedInLookup(Config->Font, 0, Gsub->LookupIndex, CurrentGlyph->Id) &&
+             ((CurrentGlyph->Flags & EffectiveGlyphFilter) == EffectiveGlyphFilter) &&
+             kbts_ConfigAllowsFeatures(S, Config, CurrentGlyph->Config, &LookupFeatures))
           {
-            kbts_gsub_frame *Frame = &Frames[S->FrameCount++];
+            kbts_gsub_frame *Frame = &Frames[0];
 
             Frame->LookupIndex = (kbts_u16)Gsub->LookupIndex;
             Frame->SubtableIndex = 0;
             Frame->InputGlyphIndex = (kbts_u16)S->GlyphIndex;
+            S->FrameCount = 1;
+          }
+        }
+
+        while(S->FrameCount)
+        {
+          if(0)
+          {
+          ResumePoint2:;
+            FontGsub = Font->ShapingTables[KBTS_SHAPING_TABLE_GSUB];
+            Gsub = &S->OpSpecific.Gsub;
+            LookupList = kbts_GetLookupList(FontGsub);
+            Frames = KBTS_POINTER_AFTER(kbts_gsub_frame, S);
+            LookupFeatures = Gsub->LookupFeatures;
+            GlyphFilter = Gsub->GlyphFilter;
+            SkipFlags = Gsub->SkipFlags;
           }
 
-          while(S->FrameCount)
+          // These flags are used by USE.
+          kbts_u32 GeneratedGlyphFlags = GlyphFilter & (KBTS_GLYPH_FLAG_RPHF | KBTS_GLYPH_FLAG_PREF);
+          kbts_substitution_result_flags SubstitutionFlags = kbts_DoSubstitution(ShapeState, LookupList, Frames, &S->FrameCount, GlyphArray, 0, SkipFlags, GeneratedGlyphFlags);
+          if(SubstitutionFlags & KBTS_SUBSTITUTION_RESULT_FLAG_GROW_BUFFER)
           {
-            if(0)
-            {
-            ResumePoint2:;
-              FontGsub = Font->ShapingTables[KBTS_SHAPING_TABLE_GSUB];
-              Gsub = &S->OpSpecific.Gsub;
-              LookupList = kbts_GetLookupList(FontGsub);
-              Frames = KBTS_POINTER_AFTER(kbts_gsub_frame, S);
-              LookupFeatures = Gsub->LookupFeatures;
-              GlyphFilter = Gsub->GlyphFilter;
-              SkipFlags = Gsub->SkipFlags;
-            }
+            Gsub->GlyphFilter = GlyphFilter;
+            Gsub->SkipFlags = SkipFlags;
+            S->ResumePoint = 2;
 
-            // These flags are used by USE.
-            kbts_u32 GeneratedGlyphFlags = GlyphFilter & (KBTS_GLYPH_FLAG_RPHF | KBTS_GLYPH_FLAG_PREF);
-            kbts_substitution_result_flags SubstitutionFlags = kbts_DoSubstitution(ShapeState, LookupList, Frames, &S->FrameCount, GlyphArray, 0, SkipFlags, GeneratedGlyphFlags);
-            if(SubstitutionFlags & KBTS_SUBSTITUTION_RESULT_FLAG_GROW_BUFFER)
-            {
-              Gsub->GlyphFilter = GlyphFilter;
-              Gsub->SkipFlags = SkipFlags;
-              S->ResumePoint = 2;
-
-              KBTS_INSTRUMENT_END
-              return 1;
-            }
+            KBTS_INSTRUMENT_END
+            return 1;
           }
         }
 
@@ -20269,8 +20272,8 @@ static kbts_begin_cluster_result kbts_BeginCluster(kbts_shape_state *ShapeState,
       }
 
       // All post-base glyphs get BLWF, ABVF, PSTF. Some get PREF.
-      kbts_glyph Scratch[2] = {0};
-      kbts_glyph *LastGlyph = 0;
+      kbts_glyph Scratch[2]; Scratch[0] = Scratch[1] = KBTS_ZERO_TYPE(kbts_glyph);
+      kbts_glyph *LastGlyph; LastGlyph = 0;
       KBTS_FOR(GlyphIndex, BaseIndex + 1, ScanGlyphIndex)
       {
         kbts_glyph *Glyph = &Glyphs[GlyphIndex];
@@ -21384,14 +21387,15 @@ KBTS_EXPORT int kbts_Shape(kbts_shape_state *State, kbts_shape_config *Config, k
         }
       }
 
-      kbts_begin_cluster_result BeginClusterResult = kbts_BeginCluster(State, Glyphs + State->At, GlyphArray->Count - State->At);
-      GlyphArray->Count += BeginClusterResult.InsertedGlyphCount;
-      GlyphArray->TotalCount += BeginClusterResult.InsertedGlyphCount;
-      State->ClusterGlyphCount = (kbts_u32)BeginClusterResult.ClusterGlyphCount;
+      {
+        kbts_begin_cluster_result BeginClusterResult = kbts_BeginCluster(State, Glyphs + State->At, GlyphArray->Count - State->At);
+        GlyphArray->Count += BeginClusterResult.InsertedGlyphCount;
+        GlyphArray->TotalCount += BeginClusterResult.InsertedGlyphCount;
+        State->ClusterGlyphCount = (kbts_u32)BeginClusterResult.ClusterGlyphCount;
+        *Cluster = kbts_GlyphArray(Glyphs + State->At, BeginClusterResult.ClusterGlyphCount, GlyphArray->Count - State->At, GlyphCapacity - State->At);
+      }
 
-      *Cluster = kbts_GlyphArray(Glyphs + State->At, BeginClusterResult.ClusterGlyphCount, GlyphArray->Count - State->At, GlyphCapacity - State->At);
-
-      kbts_glyph *LastGlyphInCluster = &Glyphs[State->At + Cluster->Count - 1];
+      kbts_glyph *LastGlyphInCluster; LastGlyphInCluster = &Glyphs[State->At + Cluster->Count - 1];
       State->WordBreak = !(LastGlyphInCluster->UnicodeFlags & KBTS_UNICODE_FLAG_PART_OF_WORD);
 
       for(State->Ip = 0; State->Ip < Config->OpLists[1].Length;)
@@ -21405,7 +21409,7 @@ KBTS_EXPORT int kbts_Shape(kbts_shape_state *State, kbts_shape_config *Config, k
         }
       }
 
-      kbts_end_cluster_result EndClusterResult = kbts_EndCluster(State, Cluster);
+      kbts_end_cluster_result EndClusterResult; EndClusterResult = kbts_EndCluster(State, Cluster);
       if(EndClusterResult.InsertDottedCircle)
       {
         State->DottedCircleInsertIndex = (kbts_u32)EndClusterResult.DottedCircleIndex;
@@ -23666,20 +23670,22 @@ static void kbts_BreakAddCodepoint_(kbts_break_state *State, kbts_u32 Codepoint,
     #undef KBTS_LINE_BREAK
     #undef KBTS_LINE_UNBREAK
 
-    kbts_u64 EffectiveLineBreaks = LineBreaks & ~(LineUnbreaks | LineUnbreaksAsync);
-
-    kbts_DoLineBreak(State, PositionOffset3 + LineBreak3PositionOffset, EffectiveLineBreaks >> 48, 0, 0);
-    if(EndOfText)
     {
-      kbts_DoLineBreak(State, PositionOffset2 + LineBreak2PositionOffset, EffectiveLineBreaks >> 32, 0, 0);
-      { // @Cleanup: This is the same flag code as DoLineBreak, but we want to use FlagState buffering for this.
-        // The only places where we want to manually call DoBreak is for asynchronous/buffered guys.
-        kbts_u8 FlushFlags = 0;
-        if((EffectiveLineBreaks >> 16) & KBTS_LINE_BREAK_ALLOWED_MASK) FlushFlags |= KBTS_BREAK_FLAG_LINE_SOFT;
-        if((EffectiveLineBreaks >> 16) & KBTS_LINE_BREAK_REQUIRED_MASK) FlushFlags |= KBTS_BREAK_FLAG_LINE_HARD;
-        KBTS_BREAK(FlushFlags, 1);
+      kbts_u64 EffectiveLineBreaks = LineBreaks & ~(LineUnbreaks | LineUnbreaksAsync);
+
+      kbts_DoLineBreak(State, PositionOffset3 + LineBreak3PositionOffset, EffectiveLineBreaks >> 48, 0, 0);
+      if(EndOfText)
+      {
+        kbts_DoLineBreak(State, PositionOffset2 + LineBreak2PositionOffset, EffectiveLineBreaks >> 32, 0, 0);
+        { // @Cleanup: This is the same flag code as DoLineBreak, but we want to use FlagState buffering for this.
+          // The only places where we want to manually call DoBreak is for asynchronous/buffered guys.
+          kbts_u8 FlushFlags = 0;
+          if((EffectiveLineBreaks >> 16) & KBTS_LINE_BREAK_ALLOWED_MASK) FlushFlags |= KBTS_BREAK_FLAG_LINE_SOFT;
+          if((EffectiveLineBreaks >> 16) & KBTS_LINE_BREAK_REQUIRED_MASK) FlushFlags |= KBTS_BREAK_FLAG_LINE_HARD;
+          KBTS_BREAK(FlushFlags, 1);
+        }
+        // Lines are never broken after the end of text.
       }
-      // Lines are never broken after the end of text.
     }
 
     State->LineBreaks = LineBreaks;
