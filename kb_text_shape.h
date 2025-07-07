@@ -18498,7 +18498,6 @@ static kbts_u32 kbts_ExecuteOp(kbts_shape_state *ShapeState, kbts_glyph_array *G
   kbts_op *Op = &ShapeState->Op;
   kbts_op_state *S = &ShapeState->OpState;
   kbts_glyph *Glyphs = GlyphArray->Glyphs;
-  kbts_op_state_normalize_hangul *NormalizeHangul = &S->OpSpecific.NormalizeHangul;
 
   kbts_u32 ResumePoint = S->ResumePoint;
   S->ResumePoint = 0;
@@ -19124,6 +19123,7 @@ static kbts_u32 kbts_ExecuteOp(kbts_shape_state *ShapeState, kbts_glyph_array *G
   case KBTS_OP_KIND_NORMALIZE_HANGUL:
   {
     KBTS_INSTRUMENT_BLOCK_BEGIN("NORMALIZE_HANGUL")
+    kbts_op_state_normalize_hangul *NormalizeHangul; NormalizeHangul = &S->OpSpecific.NormalizeHangul;
     S->GlyphIndex = 0;
     while(S->GlyphIndex < GlyphArray->Count)
     {
@@ -21339,11 +21339,15 @@ KBTS_EXPORT int kbts_Shape(kbts_shape_state *State, kbts_shape_config *Config, k
   State->Config = Config;
   State->MainDirection = MainDirection;
   State->RunDirection = RunDirection;
-  State->GlyphArray = kbts_GlyphArray(Glyphs, *GlyphCount, *GlyphCount, GlyphCapacity);
 
   kbts_glyph_array *GlyphArray = &State->GlyphArray;
+  // The Glyphs array might move after a grow, so update the pointers here.
+  // We preserve Count information, though, because it makes it simpler not to touch anything
+  // when we are dealing with sub-arrays like Cluster.
+  GlyphArray->Glyphs = Glyphs;
+  GlyphArray->Capacity = GlyphCapacity;
   kbts_glyph_array *Cluster = &State->ClusterGlyphArray;
-  Cluster->Glyphs = Glyphs + State->At; // In case the Glyphs array moved after a grow.
+  Cluster->Glyphs = Glyphs + State->At;
   Cluster->Capacity = GlyphCapacity - State->At;
 
   kbts_u32 ResumePoint = State->ResumePoint;
@@ -21357,6 +21361,8 @@ KBTS_EXPORT int kbts_Shape(kbts_shape_state *State, kbts_shape_config *Config, k
   case 5: goto ResumePoint5; break;
   case 6: goto ResumePoint6; break;
   }
+
+  *GlyphArray = kbts_GlyphArray(Glyphs, *GlyphCount, *GlyphCount, GlyphCapacity);
 
   // For simple shapers, all of the shaping happens in this single loop.
   // For complex shapers, this loop is preparing the text for clustering logic, which happens below.
