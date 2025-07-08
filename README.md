@@ -73,10 +73,11 @@ void SegmentText(uint32_t *Codepoints, size_t CodepointCount)
     kbts_break Break;
     while(kbts_Break(&BreakState, &Break))
     {
-      if((Break.Position > RunStart) && (Break.Flags & KBTS_BREAK_FLAG_DIRECTION | KBTS_BREAK_FLAG_SCRIPT | KBTS_BREAK_FLAG_LINE_HARD))
+      if((Break.Position > RunStart) && (Break.Flags & (KBTS_BREAK_FLAG_DIRECTION | KBTS_BREAK_FLAG_SCRIPT | KBTS_BREAK_FLAG_LINE_HARD)))
       {
         size_t RunLength = Break.Position - RunStart;
         ShapeText(&Cursor, Codepoints + RunStart, RunLength, BreakState.MainDirection, Direction, Script);
+        RunStart = Break.Position;
       }
 
       if(Break.Flags & KBTS_BREAK_FLAG_DIRECTION)

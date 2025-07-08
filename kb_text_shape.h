@@ -98,7 +98,7 @@
        kbts_direction Direction = KBTS_DIRECTION_NONE;
        for(size_t StringAt = 0; StringAt < Length;)
        {
-         kbts_decode Decode = kbts_DecodeUtf8(String, Length - StringAt);
+         kbts_decode Decode = kbts_DecodeUtf8(String + StringAt, Length - StringAt);
          StringAt += Decode.SourceCharactersConsumed;
          if(Decode.Valid)
          {
