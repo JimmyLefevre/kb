@@ -3113,7 +3113,7 @@ static kbts_script_properties kbts_ScriptProperties[KBTS_SCRIPT_COUNT] = {
 KBTS_EXPORT kbts_script kbts_ScriptTagToScript(kbts_script_tag Tag)
 {
   kbts_script Result = 0;
-  switch(Result)
+  switch(Tag)
   {
   case KBTS_SCRIPT_TAG_DONT_KNOW: Result = KBTS_SCRIPT_DONT_KNOW; break;
   case KBTS_SCRIPT_TAG_ADLAM: Result = KBTS_SCRIPT_ADLAM; break;
