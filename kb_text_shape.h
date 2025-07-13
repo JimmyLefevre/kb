@@ -286,6 +286,29 @@
        // Once a shape_config has been created, it is assumed to be immutable and can be trivially shared
        // between runs/operations that have the same parameters.
 
+   PERFORMANCE
+     Just like most libraries that interact with font files, we use the file as an in-memory database.
+     There are a few issues with this approach:
+     - Font files can be arbitrarily complex, making it difficult to predict system behavior at runtime.
+     - Font files are encoded in big endian byte order, which is stupid and slow.
+     We compensate for this by pre-processing as much as we can when opening the file. Notably, we
+     byteswap everything we need in-place, we precompute some useful runtime memory bounds, and we
+     allocate a few auxiliary acceleration structures.
+
+     Since we byteswap everything in-place, you cannot pass the same font data to kbts and to another
+     library, because the other library will expect everything to be big endian.
+
+     As a result of this approach, opening fonts is slow and shaping is fast. This is very much intentional.
+     At the time of writing (2025-07-13), on Harfbuzz's test suite, we are, on average, 4.5x faster than
+     Harfbuzz on my laptop (Ryzen 9 5900HX). As fonts are complex, and Harfbuzz's test suite is quite varied,
+     the speedup numbers are rather spread out:
+       Best: 22x
+       10th percentile: 6.5x
+       Median: 4.5x
+       90th percentile: 2.5x
+       Worst: 1.05x
+     So, aside from a few extreme cases, you should expect a small integer speedup factor compared to Harfbuzz.
+
    LANGUAGE SUPPORT
      Shaping is NOT supported for the following scripts:
        Zawgyi: some fonts exist, but no standardized OpenType feature set seems to exist as of writing.
