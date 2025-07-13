@@ -16097,8 +16097,7 @@ KBTS_EXPORT kbts_glyph kbts_CodepointToGlyph(kbts_font *Font, kbts_u32 Codepoint
       {
         Result.Id = Cmap0->GlyphIdArray[Codepoint];
       }
-    }
-    break;
+    } break;
 
     case 2:
     {
@@ -16139,8 +16138,7 @@ KBTS_EXPORT kbts_glyph kbts_CodepointToGlyph(kbts_font *Font, kbts_u32 Codepoint
 
         Result.Id = GlyphId;
       }
-    }
-    break;
+    } break;
 
     case 4:
     {
@@ -16150,31 +16148,36 @@ KBTS_EXPORT kbts_glyph kbts_CodepointToGlyph(kbts_font *Font, kbts_u32 Codepoint
       kbts_u16 *StartCodes = EndCodes + SegmentCount + 1;
       kbts_s16 *IdDeltas = (kbts_s16 *)(StartCodes + SegmentCount);
       kbts_u16 *IdRangeOffsets = (kbts_u16 *)(IdDeltas + SegmentCount);
+      kbts_un SegmentIndexOffset = 0;
 
-      KBTS_FOR(SegmentIndex, 0, SegmentCount)
+      if(SegmentCount)
       {
-        kbts_u16 Start = StartCodes[SegmentIndex];
-        if((Codepoint >= Start) && (Codepoint <= EndCodes[SegmentIndex]))
+        while(SegmentCount > 1)
         {
-          kbts_s16 Delta = IdDeltas[SegmentIndex];
-          kbts_u16 RangeOffset = IdRangeOffsets[SegmentIndex];
-
-          kbts_u16 GlyphId = (kbts_u16)Delta;
-          if(RangeOffset)
-          {
-            GlyphId += *(&IdRangeOffsets[SegmentIndex] + (Codepoint - Start) + RangeOffset / 2);
-          }
-          else
-          {
-            GlyphId += (kbts_u16)(Codepoint);
-          }
-          Result.Id = GlyphId;
-
-          break;
+          kbts_un HalfCount = SegmentCount / 2;
+          SegmentIndexOffset = (EndCodes[SegmentIndexOffset + HalfCount - 1] < Codepoint) ? (SegmentIndexOffset + HalfCount) : SegmentIndexOffset;
+          SegmentCount -= HalfCount;
         }
       }
-    }
-    break;
+
+      kbts_u16 Start = StartCodes[SegmentIndexOffset];
+      if((Codepoint >= Start) && (Codepoint <= EndCodes[SegmentIndexOffset]))
+      {
+        kbts_s16 Delta = IdDeltas[SegmentIndexOffset];
+        kbts_u16 RangeOffset = IdRangeOffsets[SegmentIndexOffset];
+
+        kbts_u16 GlyphId = (kbts_u16)Delta;
+        if(RangeOffset)
+        {
+          GlyphId += *(&IdRangeOffsets[SegmentIndexOffset] + (Codepoint - Start) + RangeOffset / 2);
+        }
+        else
+        {
+          GlyphId += (kbts_u16)(Codepoint);
+        }
+        Result.Id = GlyphId;
+      }
+    } break;
 
     case 6:
     {
@@ -16186,8 +16189,7 @@ KBTS_EXPORT kbts_glyph kbts_CodepointToGlyph(kbts_font *Font, kbts_u32 Codepoint
       {
         Result.Id = GlyphIds[Offset];
       }
-    }
-    break;
+    } break;
 
     case 12:
     {
@@ -16195,22 +16197,25 @@ KBTS_EXPORT kbts_glyph kbts_CodepointToGlyph(kbts_font *Font, kbts_u32 Codepoint
       kbts_sequential_map_group *Groups = KBTS_POINTER_AFTER(kbts_sequential_map_group, Cmap12);
 
       kbts_un GlyphId = 0;
-      KBTS_FOR(GroupIndex, 0, Cmap12->GroupCount)
+      kbts_un GroupCount = Cmap12->GroupCount;
+      if(GroupCount)
       {
-        kbts_sequential_map_group *Group = &Groups[GroupIndex];
-
-        if((Codepoint >= Group->StartCharacterCode) && (Codepoint <= Group->EndCharacterCode))
+        while(GroupCount > 1)
         {
-          kbts_un Offset = Codepoint - Group->StartCharacterCode;
-          GlyphId = Group->StartGlyphId + Offset;
-
-          break;
+          kbts_un HalfCount = GroupCount / 2;
+          Groups = (Groups[HalfCount - 1].EndCharacterCode < Codepoint) ? (Groups + HalfCount) : Groups;
+          GroupCount -= HalfCount;
         }
       }
 
+      if((Codepoint >= Groups->StartCharacterCode) && (Codepoint <= Groups->EndCharacterCode))
+      {
+        kbts_un Offset = Codepoint - Groups->StartCharacterCode;
+        GlyphId = Groups->StartGlyphId + Offset;
+      }
+
       Result.Id = (kbts_u16)GlyphId;
-    }
-    break;
+    } break;
     }
   }
 
