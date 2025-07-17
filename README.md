@@ -1,3 +1,34 @@
+
+<div align="right">
+  <details>
+    <summary >🌐 Language</summary>
+    <div>
+      <div align="center">
+        <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=en">English</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=zh-CN">简体中文</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=zh-TW">繁體中文</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=ja">日本語</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=ko">한국어</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=hi">हिन्दी</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=th">ไทย</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=fr">Français</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=de">Deutsch</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=es">Español</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=it">Itapano</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=ru">Русский</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=pt">Português</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=nl">Nederlands</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=pl">Polski</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=ar">العربية</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=fa">فارسی</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=tr">Türkçe</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=vi">Tiếng Việt</a>
+        | <a href="https://openaitx.github.io/view.html?user=JimmyLefevre&project=kb&lang=id">Bahasa Indonesia</a>
+      </div>
+    </div>
+  </details>
+</div>
+
 # kb
 
 [Single-header](https://github.com/nothings/stb/blob/master/docs/stb_howto.txt) permissively-licensed libraries for C/C++.
