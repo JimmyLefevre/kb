@@ -15,81 +15,56 @@
 ![Example of Gunjala Gondi shaping with stb_truetype](./images/gunjala_gondi.png)
 ![Example of toggling the smallcaps font feature](./images/smallcaps.png)
 
-[kb\_text\_shape.h](./kb_text_shape.h) provides ICU-like text segmentation (i.e. breaking Unicode text by direction, line, word and grapheme). It also provides Harfbuzz-like text shaping for OpenType fonts, which means it is capable of handling complex script layout and ligatures, among other things.
+[kb\_text\_shape.h](./kb_text_shape.h) provides:
+- ICU-like text segmentation (i.e. breaking Unicode text by direction, line, script, word and grapheme).
+- Harfbuzz-like text shaping for OpenType fonts, which means it is capable of handling complex script layout and ligatures, among other things.
+- Font coverage checking: know if a font can display a given string.
 
-It does **not** handle rasterization. It does **not** handle paragraph layout. It will only help you know which glyphs to display where on a single, infinitely-long line!
+It does **not** handle rasterization. It does **not** handle paragraph layout. It does **not** handle selection and loading of system fonts. It will only help you know which glyphs to display where on a single, infinitely-long line, using the fonts you have provided!
 
 (See https://www.newroadoldway.com/text1.html for an explanation of the different steps of text processing.)
 
+For an in-depth usage example, check out [refpad](https://github.com/JimmyLefevre/refpad).
+
 ```c
-static kbts_font GlobalFont;
+// Yours to provide:
+void DrawGlyph(kbts_u16 GlyphId, kbts_s32 GlyphOffsetX, kbts_s32 GlyphOffsetY, kbts_s32 GlyphAdvanceX, kbts_s32 GlyphAdvanceY,
+               kbts_direction ParagraphDirection, kbts_direction RunDirection, kbts_script Script, kbts_font *Font);
+void NextLine(void);
+void *CreateRenderFont(const char *FontPath);
 
-void RenderGlyph(kbts_glyph *Glyph, int X, int Y); // Yours to implement
-
-void ShapeText(kbts_cursor *Cursor, uint32_t *Codepoints, size_t CodepointCount, kbts_direction MainDirection, kbts_direction Direction, kbts_script Script)
+void HandleText(kbts_shape_context *Context, const char *Text, kbts_language Language)
 {
-  kbts_glyph *Glyphs = (kbts_glyph *)malloc(sizeof(kbts_glyph) * CodepointCount);
+  kbts_ShapeBegin(Context, KBTS_DIRECTION_DONT_KNOW, Language);
+  kbts_ShapeUtf8(Context, Text, (int)strlen(Text), KBTS_USER_ID_GENERATION_MODE_CODEPOINT_INDEX);
+  kbts_ShapeEnd(Context);
 
-  for(size_t CodepointIndex = 0; CodepointIndex < CodepointCount; ++CodepointIndex)
+  kbts_run Run;
+  while(kbts_ShapeRun(Context, &Run))
   {
-    Glyphs[CodepointIndex] = kbts_CodepointToGlyph(&GlobalFont, Codepoints[CodepointIndex]);
-  }
-
-  kbts_shape_state *State = kbts_CreateShapeState(&GlobalFont);
-  kbts_shape_config Config = kbts_ShapeConfig(&GlobalFont, Script, KBTS_LANGUAGE_DONT_KNOW);
-
-  uint32_t GlyphCount = CodepointCount;
-  uint32_t GlyphCapacity = GlyphCount;
-  while(kbts_Shape(State, &Config, MainDirection, Direction, Glyphs, &GlyphCount, GlyphCapacity))
-  {
-    Glyphs = (kbts_glyph *)realloc(sizeof(kbts_glyph) * State->RequiredGlyphCapacity);
-    GlyphCapacity = State->RequiredGlyphCapacity;
-  }
-
-  for(size_t GlyphIndex = 0; GlyphIndex < GlyphCount; ++GlyphIndex)
-  {
-    kbts_glyph *Glyph = &Glyphs[GlyphIndex];
-
-    int X, Y;
-    kbts_PositionGlyph(Cursor, Glyph, &X, &Y);
-
-    RenderGlyph(Glyph, X, Y);
-  }
-
-  free(Glyphs);
-}
-
-void SegmentText(uint32_t *Codepoints, size_t CodepointCount)
-{
-  kbts_cursor Cursor = {0};
-  kbts_direction Direction = KBTS_DIRECTION_NONE;
-  kbts_script Script = KBTS_SCRIPT_DONT_KNOW;
-  size_t RunStart = 0;
-  kbts_break_state BreakState;
-  kbts_BeginBreak(&BreakState, KBTS_DIRECTION_NONE, KBTS_JAPANESE_LINE_BREAK_STYLE_NORMAL);
-  for(size_t CodepointIndex = 0; CodepointIndex < CodepointCount; ++CodepointIndex)
-  {
-    kbts_BreakAddCodepoint(&BreakState, Codepoints[CodepointIndex], 1, (CodepointIndex + 1) == CodepointCount);
-    kbts_break Break;
-    while(kbts_Break(&BreakState, &Break))
+    if(Run.Flags & KBTS_BREAK_FLAG_LINE_HARD)
     {
-      if((Break.Position > RunStart) && (Break.Flags & (KBTS_BREAK_FLAG_DIRECTION | KBTS_BREAK_FLAG_SCRIPT | KBTS_BREAK_FLAG_LINE_HARD)))
-      {
-        size_t RunLength = Break.Position - RunStart;
-        ShapeText(&Cursor, Codepoints + RunStart, RunLength, BreakState.MainDirection, Direction, Script);
-        RunStart = Break.Position;
-      }
+      NextLine();
+    }
 
-      if(Break.Flags & KBTS_BREAK_FLAG_DIRECTION)
-      {
-        Direction = Break.Direction;
-        if(!Cursor.Direction) Cursor = kbts_Cursor(BreakState.MainDirection);
-      }
-      if(Break.Flags & KBTS_BREAK_FLAG_SCRIPT)
-      {
-        Script = Break.Script;
-      }
+    kbts_glyph *Glyph;
+    while(kbts_GlyphIteratorNext(&Run.Glyphs, &Glyph))
+    {
+      DrawGlyph(Glyph->Id, Glyph->OffsetX, Glyph->OffsetY, Glyph->AdvanceX, Glyph->AdvanceY,
+                Run.ParagraphDirection, Run.Direction, Run.Script, Run.Font);
     }
   }
+}
+
+void Example(void)
+{
+  kbts_shape_context *Context = kbts_CreateShapeContext(0, 0);
+  kbts_font *FontA = kbts_ShapePushFontFromFile(Context, "NotoSansMyanmar-Regular.ttf", 0);
+  kbts_font *FontB = kbts_ShapePushFontFromFile(Context, "NotoSansArabic-Regular.ttf", 0);
+
+  FontA->UserData = CreateRenderFont("NotoSansMyanmar-Regular.ttf");
+  FontB->UserData = CreateRenderFont("NotoSansArabic-Regular.ttf");
+
+  HandleText(Context, (const char *)u8"یکအမည်မရှိیک", KBTS_LANGUAGE_ARABIC);
 }
 ```
