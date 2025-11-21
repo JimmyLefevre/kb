@@ -17558,7 +17558,19 @@ static kbts__skip_flags kbts__SkipFlags(kbts_feature_id FeatureId, kbts_shaper S
   case KBTS_FEATURE_ID_psts:
   case KBTS_FEATURE_ID_haln:
   case KBTS_FEATURE_ID_cfar:
-    Result = ((Shaper == KBTS_SHAPER_INDIC) || (Shaper == KBTS_SHAPER_KHMER)) ? 0 : KBTS__SKIP_FLAG_ZWNJ | KBTS__SKIP_FLAG_ZWJ;
+    if(Shaper == KBTS_SHAPER_USE)
+    {
+      Result = KBTS__SKIP_FLAG_ZWNJ;
+    }
+    else if((Shaper == KBTS_SHAPER_INDIC) ||
+            (Shaper == KBTS_SHAPER_KHMER))
+    {
+      Result = 0;
+    }
+    else
+    {
+      Result = KBTS__SKIP_FLAG_ZWNJ | KBTS__SKIP_FLAG_ZWJ;
+    }
     break;
 
   case KBTS_FEATURE_ID_init:
