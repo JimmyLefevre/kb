@@ -93,10 +93,8 @@
       If you do this:
         #define KB_TEXT_SHAPE_NO_CRT
       then we do not use the C runtime library. These functions are compiled out:
-        kbts_CreateShapeState()
-        kbts_FreeShapeState()
+        kbts_ShapePushFontFromFile()
         kbts_FontFromFile()
-        kbts_FreeFont()
        Additionally, there are some functions that you will want to #define yourself:
         KBTS_MEMSET
         KBTS_MEMCPY
