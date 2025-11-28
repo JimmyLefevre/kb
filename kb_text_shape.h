@@ -3956,14 +3956,18 @@ KBTS_EXPORT kbts_script kbts_ScriptTagToScript(kbts_script_tag Tag);
 #include <stdio.h>
 #endif
 
+#ifndef KB_TEXT_SHAPE_NO_CRT
 #ifndef KBTS_MEMSET
 #include <string.h>
 #define KBTS_MEMSET memset
 #endif
+#endif
 
+#ifndef KB_TEXT_SHAPE_NO_CRT
 #ifndef KBTS_MEMCPY
 #include <string.h>
 #define KBTS_MEMCPY memcpy
+#endif
 #endif
 
 #ifndef KB_TEXT_SHAPE_NO_CRT
