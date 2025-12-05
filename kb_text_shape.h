@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.0 - text segmentation and shaping
+/*  kb_text_shape - v2.01 - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -84,26 +84,35 @@
 
     COMPILING & LINKING
       This library uses declare-anywhere, so it will not compile as C89/VC6 C.
+
       In one C/C++ file that #includes this file, do this:
         #define KB_TEXT_SHAPE_IMPLEMENTATION
       before the #include. That will create the implementation in that file.
+
       If you also do this:
         #define KB_TEXT_SHAPE_STATIC
       then all functions will be declared as static.
+
       If you do this:
         #define KB_TEXT_SHAPE_NO_CRT
-      then we do not use the C runtime library. These functions are compiled out:
-        kbts_CreateShapeState()
-        kbts_FreeShapeState()
+      then we do not use the C runtime library.
+      In that case, these functions are compiled out:
+        kbts_ShapePushFontFromFile()
         kbts_FontFromFile()
-        kbts_FreeFont()
-       Additionally, there are some functions that you will want to #define yourself:
+      Additionally, there are some functions that you will want to #define yourself:
         KBTS_MEMSET
+          defaults to memset otherwise.
         KBTS_MEMCPY
+          defaults to memcpy otherwise.
       You can redefine the default allocator by redefining these:
         KBTS_MALLOC(AllocatorData, Size)
+          defaults to 0 if KB_TEXT_SHAPE_NO_CRT is defined,
+          defaults to malloc(Size) otherwise.
         KBTS_FREE(AllocatorData, Pointer)
-      If you do not redefine the default allocator, and you #define KB_TEXT_SHAPE_NO_CRT,
+          defaults to a no-op if KB_TEXT_SHAPE_NO_CRT is defined,
+          defaults to free(Pointer) otherwise.
+      In other words,
+      if you do not redefine the default allocator, and you #define KB_TEXT_SHAPE_NO_CRT,
       then the default allocator always returns 0.
 
     EXAMPLES
@@ -727,15 +736,32 @@
 
           A zeroed kbts_glyph_storage will auto-initialize itself when you try to use it.
 
-          Arena requires an allocator. By default, it will be initialized to KBTS_MALLOC and KBTS_FREE.
-          You can specify your own allocator by writing to Arena.Allocator and Arena.AllocatorData
-          before trying to use a kbts_glyph_storage.
+          Arena requires an allocator. By default, it will be initialized to KBTS_MALLOC
+          and KBTS_FREE.
+          You can specify your own allocator by writing to Arena.Allocator and
+          Arena.AllocatorData before trying to use a kbts_glyph_storage.
+          Alternatively, you can use kbts_InitializeGlyphStorage() to accomplish the
+          same thing.
+
+          :kbts_InitializeGlyphStorage
+          :InitializeGlyphStorage
+          int kbts_InitializeGlyphStorage(kbts_glyph_storage *Storage, kbts_allocator_function *Allocator, void *AllocatorData)
+            Initializes [Storage] to use [Allocator] and [AllocatorData].
+
+            This is equivalent to setting [Storage]->Arena.Allocator and
+            [Storage]->Arena.AllocatorData, and setting all other members to 0.
+
+            The [return value] is non-zero if [Storage] is non-null.
 
           :kbts_InitializeGlyphStorageFixedMemory
           :InitializeGlyphStorageFixedMemory
           int kbts_InitializeGlyphStorageFixedMemory(kbts_glyph_storage *Storage, void *Memory, int MemorySize)
             Initializes [Storage] to use a fixed-size buffer of size [MemorySize] located at [Memory].
             If [Storage] needs more memory than [MemorySize], allocations will fail.
+
+            The [return value] is non-zero if [Storage] is non-null and [MemorySize] is
+            large enough to initialize [Storage]'s arena. (Currently, this is 5 pointers'
+            worth of bytes.)
 
           :kbts_PushGlyph
           :PushGlyph
@@ -1126,7 +1152,7 @@
             whereas it is 0 if any glyph was not supported.
             You can also check Test->Error to see if any glyph was unsupported.
 
-        OTHER:OTHER
+        OTHER:OTHER OTHER:MISC
           :kbts_DecodeUtf8
           :DecodeUtf8
           kbts_decode kbts_DecodeUtf8(const char *Utf8, kbts_un Length)
@@ -1165,6 +1191,11 @@
             Valid is whether or not [Codepoint] is a valid codepoint to encode.
             (All codepoints up to 0x10FFFF inclusive can be encoded.)
             When Valid is 0, EncodedLength is also 0.
+
+          :kbts_ScriptDirection
+          :ScriptDirection
+          kbts_direction kbts_ScriptDirection(kbts_script Script)
+            Returns the default direction for a given script.
 
           :kbts_ScriptIsComplex
           :ScriptIsComplex
@@ -1214,6 +1245,13 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     2.01  - Add kbts_InitializeGlyphStorage and kbts_ScriptDirection.
+             Rename some private functions for better namespacing.
+             Delete some deprecated functions.
+             Bounds check in kbts_ScriptIsComplex.
+             Fix a couple pointer iteration bugs.
+             Fix some pedantic MSVC warnings.
+             Extend mirroring logic from brackets to any codepoint that has a Unicode mirror.
      2.0   - Completely new API and implementation.
      1.03  - New functions: kbts_FeatureTagToId(), kbts_FeatureOverrideFromTag(), kbts_EmptyGlyphConfig(), kbts_GlyphConfigOverrideFeature(), kbts_GlyphConfigOverrideFeatureFromTag(), kbts_ScriptTagToScript()
              Unregistered features can now be overriden using their tags.
@@ -2383,6 +2421,8 @@ enum kbts_unicode_flag_enum
   KBTS_UNICODE_FLAG_PART_OF_WORD = (1 << 4),
   KBTS_UNICODE_FLAG_DECIMAL_DIGIT = (1 << 5),
   KBTS_UNICODE_FLAG_NON_SPACING_MARK = (1 << 6),
+
+  KBTS_UNICODE_FLAG_MIRRORED = KBTS_UNICODE_FLAG_OPEN_BRACKET | KBTS_UNICODE_FLAG_CLOSE_BRACKET,
 };
 
 typedef kbts_u8 kbts_unicode_bidirectional_class;
@@ -3147,257 +3187,6 @@ enum kbts_feature_tag_enum
   KBTS_FEATURE_TAG_zero = KBTS_FOURCC('z', 'e', 'r', 'o'), // Slashed Zero
 };
 
-typedef kbts_u32 kbts_feature_id;
-enum kbts_feature_id_enum
-{
-  KBTS_FEATURE_ID_UNREGISTERED, // Features that aren't pre-defined in the OpenType spec
-  KBTS_FEATURE_ID_isol, // Isolated Forms
-  KBTS_FEATURE_ID_fina, // Terminal Forms
-  KBTS_FEATURE_ID_fin2, // Terminal Forms #2
-  KBTS_FEATURE_ID_fin3, // Terminal Forms #3
-  KBTS_FEATURE_ID_medi, // Medial Forms
-  KBTS_FEATURE_ID_med2, // Medial Forms #2
-  KBTS_FEATURE_ID_init, // Initial Forms
-  KBTS_FEATURE_ID_ljmo, // Leading Jamo Forms
-  KBTS_FEATURE_ID_vjmo, // Vowel Jamo Forms
-  KBTS_FEATURE_ID_tjmo, // Trailing Jamo Forms
-  KBTS_FEATURE_ID_rphf, // Reph Form
-  KBTS_FEATURE_ID_blwf, // Below-base Forms
-  KBTS_FEATURE_ID_half, // Half Forms
-  KBTS_FEATURE_ID_pstf, // Post-base Forms
-  KBTS_FEATURE_ID_abvf, // Above-base Forms
-  KBTS_FEATURE_ID_pref, // Pre-base Forms
-  KBTS_FEATURE_ID_numr, // Numerators
-  KBTS_FEATURE_ID_frac, // Fractions
-  KBTS_FEATURE_ID_dnom, // Denominators
-  KBTS_FEATURE_ID_cfar, // Conjunct Form After Ro
-  KBTS_FEATURE_ID_aalt, // Access All Alternates
-  KBTS_FEATURE_ID_abvm, // Above-base Mark Positioning
-  KBTS_FEATURE_ID_abvs, // Above-base Substitutions
-  KBTS_FEATURE_ID_afrc, // Alternative Fractions
-  KBTS_FEATURE_ID_akhn, // Akhand
-  KBTS_FEATURE_ID_apkn, // Kerning for Alternate Proportional Widths
-  KBTS_FEATURE_ID_blwm, // Below-base Mark Positioning
-  KBTS_FEATURE_ID_blws, // Below-base Substitutions
-  KBTS_FEATURE_ID_calt, // Contextual Alternates
-  KBTS_FEATURE_ID_case, // Case-sensitive Forms
-  KBTS_FEATURE_ID_ccmp, // Glyph Composition / Decomposition
-  KBTS_FEATURE_ID_chws, // Contextual Half-width Spacing
-  KBTS_FEATURE_ID_cjct, // Conjunct Forms
-  KBTS_FEATURE_ID_clig, // Contextual Ligatures
-  KBTS_FEATURE_ID_cpct, // Centered CJK Punctuation
-  KBTS_FEATURE_ID_cpsp, // Capital Spacing
-  KBTS_FEATURE_ID_cswh, // Contextual Swash
-  KBTS_FEATURE_ID_curs, // Cursive Positioning
-  KBTS_FEATURE_ID_cv01, // Character Variant 1
-  KBTS_FEATURE_ID_cv02, // Character Variant 2
-  KBTS_FEATURE_ID_cv03, // Character Variant 3
-  KBTS_FEATURE_ID_cv04, // Character Variant 4
-  KBTS_FEATURE_ID_cv05, // Character Variant 5
-  KBTS_FEATURE_ID_cv06, // Character Variant 6
-  KBTS_FEATURE_ID_cv07, // Character Variant 7
-  KBTS_FEATURE_ID_cv08, // Character Variant 8
-  KBTS_FEATURE_ID_cv09, // Character Variant 9
-  KBTS_FEATURE_ID_cv10, // Character Variant 10
-  KBTS_FEATURE_ID_cv11, // Character Variant 11
-  KBTS_FEATURE_ID_cv12, // Character Variant 12
-  KBTS_FEATURE_ID_cv13, // Character Variant 13
-  KBTS_FEATURE_ID_cv14, // Character Variant 14
-  KBTS_FEATURE_ID_cv15, // Character Variant 15
-  KBTS_FEATURE_ID_cv16, // Character Variant 16
-  KBTS_FEATURE_ID_cv17, // Character Variant 17
-  KBTS_FEATURE_ID_cv18, // Character Variant 18
-  KBTS_FEATURE_ID_cv19, // Character Variant 19
-  KBTS_FEATURE_ID_cv20, // Character Variant 20
-  KBTS_FEATURE_ID_cv21, // Character Variant 21
-  KBTS_FEATURE_ID_cv22, // Character Variant 22
-  KBTS_FEATURE_ID_cv23, // Character Variant 23
-  KBTS_FEATURE_ID_cv24, // Character Variant 24
-  KBTS_FEATURE_ID_cv25, // Character Variant 25
-  KBTS_FEATURE_ID_cv26, // Character Variant 26
-  KBTS_FEATURE_ID_cv27, // Character Variant 27
-  KBTS_FEATURE_ID_cv28, // Character Variant 28
-  KBTS_FEATURE_ID_cv29, // Character Variant 29
-  KBTS_FEATURE_ID_cv30, // Character Variant 30
-  KBTS_FEATURE_ID_cv31, // Character Variant 31
-  KBTS_FEATURE_ID_cv32, // Character Variant 32
-  KBTS_FEATURE_ID_cv33, // Character Variant 33
-  KBTS_FEATURE_ID_cv34, // Character Variant 34
-  KBTS_FEATURE_ID_cv35, // Character Variant 35
-  KBTS_FEATURE_ID_cv36, // Character Variant 36
-  KBTS_FEATURE_ID_cv37, // Character Variant 37
-  KBTS_FEATURE_ID_cv38, // Character Variant 38
-  KBTS_FEATURE_ID_cv39, // Character Variant 39
-  KBTS_FEATURE_ID_cv40, // Character Variant 40
-  KBTS_FEATURE_ID_cv41, // Character Variant 41
-  KBTS_FEATURE_ID_cv42, // Character Variant 42
-  KBTS_FEATURE_ID_cv43, // Character Variant 43
-  KBTS_FEATURE_ID_cv44, // Character Variant 44
-  KBTS_FEATURE_ID_cv45, // Character Variant 45
-  KBTS_FEATURE_ID_cv46, // Character Variant 46
-  KBTS_FEATURE_ID_cv47, // Character Variant 47
-  KBTS_FEATURE_ID_cv48, // Character Variant 48
-  KBTS_FEATURE_ID_cv49, // Character Variant 49
-  KBTS_FEATURE_ID_cv50, // Character Variant 50
-  KBTS_FEATURE_ID_cv51, // Character Variant 51
-  KBTS_FEATURE_ID_cv52, // Character Variant 52
-  KBTS_FEATURE_ID_cv53, // Character Variant 53
-  KBTS_FEATURE_ID_cv54, // Character Variant 54
-  KBTS_FEATURE_ID_cv55, // Character Variant 55
-  KBTS_FEATURE_ID_cv56, // Character Variant 56
-  KBTS_FEATURE_ID_cv57, // Character Variant 57
-  KBTS_FEATURE_ID_cv58, // Character Variant 58
-  KBTS_FEATURE_ID_cv59, // Character Variant 59
-  KBTS_FEATURE_ID_cv60, // Character Variant 60
-  KBTS_FEATURE_ID_cv61, // Character Variant 61
-  KBTS_FEATURE_ID_cv62, // Character Variant 62
-  KBTS_FEATURE_ID_cv63, // Character Variant 63
-  KBTS_FEATURE_ID_cv64, // Character Variant 64
-  KBTS_FEATURE_ID_cv65, // Character Variant 65
-  KBTS_FEATURE_ID_cv66, // Character Variant 66
-  KBTS_FEATURE_ID_cv67, // Character Variant 67
-  KBTS_FEATURE_ID_cv68, // Character Variant 68
-  KBTS_FEATURE_ID_cv69, // Character Variant 69
-  KBTS_FEATURE_ID_cv70, // Character Variant 70
-  KBTS_FEATURE_ID_cv71, // Character Variant 71
-  KBTS_FEATURE_ID_cv72, // Character Variant 72
-  KBTS_FEATURE_ID_cv73, // Character Variant 73
-  KBTS_FEATURE_ID_cv74, // Character Variant 74
-  KBTS_FEATURE_ID_cv75, // Character Variant 75
-  KBTS_FEATURE_ID_cv76, // Character Variant 76
-  KBTS_FEATURE_ID_cv77, // Character Variant 77
-  KBTS_FEATURE_ID_cv78, // Character Variant 78
-  KBTS_FEATURE_ID_cv79, // Character Variant 79
-  KBTS_FEATURE_ID_cv80, // Character Variant 80
-  KBTS_FEATURE_ID_cv81, // Character Variant 81
-  KBTS_FEATURE_ID_cv82, // Character Variant 82
-  KBTS_FEATURE_ID_cv83, // Character Variant 83
-  KBTS_FEATURE_ID_cv84, // Character Variant 84
-  KBTS_FEATURE_ID_cv85, // Character Variant 85
-  KBTS_FEATURE_ID_cv86, // Character Variant 86
-  KBTS_FEATURE_ID_cv87, // Character Variant 87
-  KBTS_FEATURE_ID_cv88, // Character Variant 88
-  KBTS_FEATURE_ID_cv89, // Character Variant 89
-  KBTS_FEATURE_ID_cv90, // Character Variant 90
-  KBTS_FEATURE_ID_cv91, // Character Variant 91
-  KBTS_FEATURE_ID_cv92, // Character Variant 92
-  KBTS_FEATURE_ID_cv93, // Character Variant 93
-  KBTS_FEATURE_ID_cv94, // Character Variant 94
-  KBTS_FEATURE_ID_cv95, // Character Variant 95
-  KBTS_FEATURE_ID_cv96, // Character Variant 96
-  KBTS_FEATURE_ID_cv97, // Character Variant 97
-  KBTS_FEATURE_ID_cv98, // Character Variant 98
-  KBTS_FEATURE_ID_cv99, // Character Variant 99
-  KBTS_FEATURE_ID_c2pc, // Petite Capitals From Capitals
-  KBTS_FEATURE_ID_c2sc, // Small Capitals From Capitals
-  KBTS_FEATURE_ID_dist, // Distances
-  KBTS_FEATURE_ID_dlig, // Discretionary Ligatures
-  KBTS_FEATURE_ID_dtls, // Dotless Forms
-  KBTS_FEATURE_ID_expt, // Expert Forms
-  KBTS_FEATURE_ID_falt, // Final Glyph on Line Alternates
-  KBTS_FEATURE_ID_flac, // Flattened Accent Forms
-  KBTS_FEATURE_ID_fwid, // Full Widths
-  KBTS_FEATURE_ID_haln, // Halant Forms
-  KBTS_FEATURE_ID_halt, // Alternate Half Widths
-  KBTS_FEATURE_ID_hist, // Historical Forms
-  KBTS_FEATURE_ID_hkna, // Horizontal Kana Alternates
-  KBTS_FEATURE_ID_hlig, // Historical Ligatures
-  KBTS_FEATURE_ID_hngl, // Hangul
-  KBTS_FEATURE_ID_hojo, // Hojo Kanji Forms (JIS X 0212-1990 Kanji Forms)
-  KBTS_FEATURE_ID_hwid, // Half Widths
-  KBTS_FEATURE_ID_ital, // Italics
-  KBTS_FEATURE_ID_jalt, // Justification Alternates
-  KBTS_FEATURE_ID_jp78, // JIS78 Forms
-  KBTS_FEATURE_ID_jp83, // JIS83 Forms
-  KBTS_FEATURE_ID_jp90, // JIS90 Forms
-  KBTS_FEATURE_ID_jp04, // JIS2004 Forms
-  KBTS_FEATURE_ID_kern, // Kerning
-  KBTS_FEATURE_ID_lfbd, // Left Bounds
-  KBTS_FEATURE_ID_liga, // Standard Ligatures
-  KBTS_FEATURE_ID_lnum, // Lining Figures
-  KBTS_FEATURE_ID_locl, // Localized Forms
-  KBTS_FEATURE_ID_ltra, // Left-to-right Alternates
-  KBTS_FEATURE_ID_ltrm, // Left-to-right Mirrored Forms
-  KBTS_FEATURE_ID_mark, // Mark Positioning
-  KBTS_FEATURE_ID_mgrk, // Mathematical Greek
-  KBTS_FEATURE_ID_mkmk, // Mark to Mark Positioning
-  KBTS_FEATURE_ID_mset, // Mark Positioning via Substitution
-  KBTS_FEATURE_ID_nalt, // Alternate Annotation Forms
-  KBTS_FEATURE_ID_nlck, // NLC Kanji Forms
-  KBTS_FEATURE_ID_nukt, // Nukta Forms
-  KBTS_FEATURE_ID_onum, // Oldstyle Figures
-  KBTS_FEATURE_ID_opbd, // Optical Bounds
-  KBTS_FEATURE_ID_ordn, // Ordinals
-  KBTS_FEATURE_ID_ornm, // Ornaments
-  KBTS_FEATURE_ID_palt, // Proportional Alternate Widths
-  KBTS_FEATURE_ID_pcap, // Petite Capitals
-  KBTS_FEATURE_ID_pkna, // Proportional Kana
-  KBTS_FEATURE_ID_pnum, // Proportional Figures
-  KBTS_FEATURE_ID_pres, // Pre-base Substitutions
-  KBTS_FEATURE_ID_psts, // Post-base Substitutions
-  KBTS_FEATURE_ID_pwid, // Proportional Widths
-  KBTS_FEATURE_ID_qwid, // Quarter Widths
-  KBTS_FEATURE_ID_rand, // Randomize
-  KBTS_FEATURE_ID_rclt, // Required Contextual Alternates
-  KBTS_FEATURE_ID_rkrf, // Rakar Forms
-  KBTS_FEATURE_ID_rlig, // Required Ligatures
-  KBTS_FEATURE_ID_rtbd, // Right Bounds
-  KBTS_FEATURE_ID_rtla, // Right-to-left Alternates
-  KBTS_FEATURE_ID_rtlm, // Right-to-left Mirrored Forms
-  KBTS_FEATURE_ID_ruby, // Ruby Notation Forms
-  KBTS_FEATURE_ID_rvrn, // Required Variation Alternates
-  KBTS_FEATURE_ID_salt, // Stylistic Alternates
-  KBTS_FEATURE_ID_sinf, // Scientific Inferiors
-  KBTS_FEATURE_ID_size, // Optical size
-  KBTS_FEATURE_ID_smcp, // Small Capitals
-  KBTS_FEATURE_ID_smpl, // Simplified Forms
-  KBTS_FEATURE_ID_ss01, // Stylistic Set 1
-  KBTS_FEATURE_ID_ss02, // Stylistic Set 2
-  KBTS_FEATURE_ID_ss03, // Stylistic Set 3
-  KBTS_FEATURE_ID_ss04, // Stylistic Set 4
-  KBTS_FEATURE_ID_ss05, // Stylistic Set 5
-  KBTS_FEATURE_ID_ss06, // Stylistic Set 6
-  KBTS_FEATURE_ID_ss07, // Stylistic Set 7
-  KBTS_FEATURE_ID_ss08, // Stylistic Set 8
-  KBTS_FEATURE_ID_ss09, // Stylistic Set 9
-  KBTS_FEATURE_ID_ss10, // Stylistic Set 10
-  KBTS_FEATURE_ID_ss11, // Stylistic Set 11
-  KBTS_FEATURE_ID_ss12, // Stylistic Set 12
-  KBTS_FEATURE_ID_ss13, // Stylistic Set 13
-  KBTS_FEATURE_ID_ss14, // Stylistic Set 14
-  KBTS_FEATURE_ID_ss15, // Stylistic Set 15
-  KBTS_FEATURE_ID_ss16, // Stylistic Set 16
-  KBTS_FEATURE_ID_ss17, // Stylistic Set 17
-  KBTS_FEATURE_ID_ss18, // Stylistic Set 18
-  KBTS_FEATURE_ID_ss19, // Stylistic Set 19
-  KBTS_FEATURE_ID_ss20, // Stylistic Set 20
-  KBTS_FEATURE_ID_ssty, // Math Script-style Alternates
-  KBTS_FEATURE_ID_stch, // Stretching Glyph Decomposition
-  KBTS_FEATURE_ID_subs, // Subscript
-  KBTS_FEATURE_ID_sups, // Superscript
-  KBTS_FEATURE_ID_swsh, // Swash
-  KBTS_FEATURE_ID_test, // Test features, only for development
-  KBTS_FEATURE_ID_titl, // Titling
-  KBTS_FEATURE_ID_tnam, // Traditional Name Forms
-  KBTS_FEATURE_ID_tnum, // Tabular Figures
-  KBTS_FEATURE_ID_trad, // Traditional Forms
-  KBTS_FEATURE_ID_twid, // Third Widths
-  KBTS_FEATURE_ID_unic, // Unicase
-  KBTS_FEATURE_ID_valt, // Alternate Vertical Metrics
-  KBTS_FEATURE_ID_vapk, // Kerning for Alternate Proportional Vertical Metrics
-  KBTS_FEATURE_ID_vatu, // Vattu Variants
-  KBTS_FEATURE_ID_vchw, // Vertical Contextual Half-width Spacing
-  KBTS_FEATURE_ID_vert, // Vertical Alternates
-  KBTS_FEATURE_ID_vhal, // Alternate Vertical Half Metrics
-  KBTS_FEATURE_ID_vkna, // Vertical Kana Alternates
-  KBTS_FEATURE_ID_vkrn, // Vertical Kerning
-  KBTS_FEATURE_ID_vpal, // Proportional Alternate Vertical Metrics
-  KBTS_FEATURE_ID_vrt2, // Vertical Alternates and Rotation
-  KBTS_FEATURE_ID_vrtr, // Vertical Alternates for Rotation
-  KBTS_FEATURE_ID_zero, // Slashed Zero
-  KBTS_FEATURE_ID_COUNT,
-};
-
 typedef struct kbts__gdef kbts__gdef;
 typedef struct kbts__cmap_14 kbts__cmap_14;
 typedef struct kbts__gsub_gpos kbts__gsub_gpos;
@@ -3845,6 +3634,7 @@ KBTS_EXPORT kbts_shape_config *kbts_CreateShapeConfig(kbts_font *Font, kbts_scri
 KBTS_EXPORT void kbts_DestroyShapeConfig(kbts_shape_config *Config);
 
 // A glyph_storage holds and recycles glyph data.
+KBTS_EXPORT int kbts_InitializeGlyphStorage(kbts_glyph_storage *Storage, kbts_allocator_function *Allocator, void *AllocatorData);
 KBTS_EXPORT int kbts_InitializeGlyphStorageFixedMemory(kbts_glyph_storage *Storage, void *Memory, int MemorySize);
 KBTS_EXPORT kbts_glyph *kbts_PushGlyph(kbts_glyph_storage *Storage, kbts_font *Font, int Codepoint, kbts_glyph_config *Config, int UserId);
 KBTS_EXPORT void kbts_ClearActiveGlyphs(kbts_glyph_storage *Storage);
@@ -3896,6 +3686,7 @@ KBTS_EXPORT int  kbts_FontCoverageTestEnd(kbts_font_coverage_test *Test);
 
 KBTS_EXPORT kbts_decode kbts_DecodeUtf8(const char *Utf8, kbts_un Length);
 KBTS_EXPORT kbts_encode_utf8 kbts_EncodeUtf8(int Codepoint);
+KBTS_EXPORT kbts_direction kbts_ScriptDirection(kbts_script Script);
 KBTS_EXPORT int kbts_ScriptIsComplex(kbts_script Script);
 KBTS_EXPORT kbts_script kbts_ScriptTagToScript(kbts_script_tag Tag);
 
@@ -4033,10 +3824,10 @@ KBTS_INLINE kbts_u32 kbts__MsbPositionOrZero32(kbts_u32 X)
 #  endif
 #endif
 
-#define KBTS__FEATURE_FLAG0(Feature) (1ull << KBTS_FEATURE_ID_##Feature)
-#define KBTS__FEATURE_FLAG1(Feature) (1ull << (KBTS_FEATURE_ID_##Feature - 64))
-#define KBTS__FEATURE_FLAG2(Feature) (1ull << (KBTS_FEATURE_ID_##Feature - 128))
-#define KBTS__FEATURE_FLAG3(Feature) (1ull << (KBTS_FEATURE_ID_##Feature - 192))
+#define KBTS__FEATURE_FLAG0(Feature) (1ull << KBTS__FEATURE_ID_##Feature)
+#define KBTS__FEATURE_FLAG1(Feature) (1ull << (KBTS__FEATURE_ID_##Feature - 64))
+#define KBTS__FEATURE_FLAG2(Feature) (1ull << (KBTS__FEATURE_ID_##Feature - 128))
+#define KBTS__FEATURE_FLAG3(Feature) (1ull << (KBTS__FEATURE_ID_##Feature - 192))
 
 // #define KBTS_SANITY_CHECK
 // #define KBTS_DUMP
@@ -4117,11 +3908,262 @@ enum kbts__syllabic_position_enum
   KBTS__SYLLABIC_POSITION_COUNT,
 };
 
+
+typedef kbts_u32 kbts__feature_id;
+enum kbts__feature_id_enum
+{
+  KBTS__FEATURE_ID_UNREGISTERED, // Features that aren't pre-defined in the OpenType spec
+  KBTS__FEATURE_ID_isol, // Isolated Forms
+  KBTS__FEATURE_ID_fina, // Terminal Forms
+  KBTS__FEATURE_ID_fin2, // Terminal Forms #2
+  KBTS__FEATURE_ID_fin3, // Terminal Forms #3
+  KBTS__FEATURE_ID_medi, // Medial Forms
+  KBTS__FEATURE_ID_med2, // Medial Forms #2
+  KBTS__FEATURE_ID_init, // Initial Forms
+  KBTS__FEATURE_ID_ljmo, // Leading Jamo Forms
+  KBTS__FEATURE_ID_vjmo, // Vowel Jamo Forms
+  KBTS__FEATURE_ID_tjmo, // Trailing Jamo Forms
+  KBTS__FEATURE_ID_rphf, // Reph Form
+  KBTS__FEATURE_ID_blwf, // Below-base Forms
+  KBTS__FEATURE_ID_half, // Half Forms
+  KBTS__FEATURE_ID_pstf, // Post-base Forms
+  KBTS__FEATURE_ID_abvf, // Above-base Forms
+  KBTS__FEATURE_ID_pref, // Pre-base Forms
+  KBTS__FEATURE_ID_numr, // Numerators
+  KBTS__FEATURE_ID_frac, // Fractions
+  KBTS__FEATURE_ID_dnom, // Denominators
+  KBTS__FEATURE_ID_cfar, // Conjunct Form After Ro
+  KBTS__FEATURE_ID_aalt, // Access All Alternates
+  KBTS__FEATURE_ID_abvm, // Above-base Mark Positioning
+  KBTS__FEATURE_ID_abvs, // Above-base Substitutions
+  KBTS__FEATURE_ID_afrc, // Alternative Fractions
+  KBTS__FEATURE_ID_akhn, // Akhand
+  KBTS__FEATURE_ID_apkn, // Kerning for Alternate Proportional Widths
+  KBTS__FEATURE_ID_blwm, // Below-base Mark Positioning
+  KBTS__FEATURE_ID_blws, // Below-base Substitutions
+  KBTS__FEATURE_ID_calt, // Contextual Alternates
+  KBTS__FEATURE_ID_case, // Case-sensitive Forms
+  KBTS__FEATURE_ID_ccmp, // Glyph Composition / Decomposition
+  KBTS__FEATURE_ID_chws, // Contextual Half-width Spacing
+  KBTS__FEATURE_ID_cjct, // Conjunct Forms
+  KBTS__FEATURE_ID_clig, // Contextual Ligatures
+  KBTS__FEATURE_ID_cpct, // Centered CJK Punctuation
+  KBTS__FEATURE_ID_cpsp, // Capital Spacing
+  KBTS__FEATURE_ID_cswh, // Contextual Swash
+  KBTS__FEATURE_ID_curs, // Cursive Positioning
+  KBTS__FEATURE_ID_cv01, // Character Variant 1
+  KBTS__FEATURE_ID_cv02, // Character Variant 2
+  KBTS__FEATURE_ID_cv03, // Character Variant 3
+  KBTS__FEATURE_ID_cv04, // Character Variant 4
+  KBTS__FEATURE_ID_cv05, // Character Variant 5
+  KBTS__FEATURE_ID_cv06, // Character Variant 6
+  KBTS__FEATURE_ID_cv07, // Character Variant 7
+  KBTS__FEATURE_ID_cv08, // Character Variant 8
+  KBTS__FEATURE_ID_cv09, // Character Variant 9
+  KBTS__FEATURE_ID_cv10, // Character Variant 10
+  KBTS__FEATURE_ID_cv11, // Character Variant 11
+  KBTS__FEATURE_ID_cv12, // Character Variant 12
+  KBTS__FEATURE_ID_cv13, // Character Variant 13
+  KBTS__FEATURE_ID_cv14, // Character Variant 14
+  KBTS__FEATURE_ID_cv15, // Character Variant 15
+  KBTS__FEATURE_ID_cv16, // Character Variant 16
+  KBTS__FEATURE_ID_cv17, // Character Variant 17
+  KBTS__FEATURE_ID_cv18, // Character Variant 18
+  KBTS__FEATURE_ID_cv19, // Character Variant 19
+  KBTS__FEATURE_ID_cv20, // Character Variant 20
+  KBTS__FEATURE_ID_cv21, // Character Variant 21
+  KBTS__FEATURE_ID_cv22, // Character Variant 22
+  KBTS__FEATURE_ID_cv23, // Character Variant 23
+  KBTS__FEATURE_ID_cv24, // Character Variant 24
+  KBTS__FEATURE_ID_cv25, // Character Variant 25
+  KBTS__FEATURE_ID_cv26, // Character Variant 26
+  KBTS__FEATURE_ID_cv27, // Character Variant 27
+  KBTS__FEATURE_ID_cv28, // Character Variant 28
+  KBTS__FEATURE_ID_cv29, // Character Variant 29
+  KBTS__FEATURE_ID_cv30, // Character Variant 30
+  KBTS__FEATURE_ID_cv31, // Character Variant 31
+  KBTS__FEATURE_ID_cv32, // Character Variant 32
+  KBTS__FEATURE_ID_cv33, // Character Variant 33
+  KBTS__FEATURE_ID_cv34, // Character Variant 34
+  KBTS__FEATURE_ID_cv35, // Character Variant 35
+  KBTS__FEATURE_ID_cv36, // Character Variant 36
+  KBTS__FEATURE_ID_cv37, // Character Variant 37
+  KBTS__FEATURE_ID_cv38, // Character Variant 38
+  KBTS__FEATURE_ID_cv39, // Character Variant 39
+  KBTS__FEATURE_ID_cv40, // Character Variant 40
+  KBTS__FEATURE_ID_cv41, // Character Variant 41
+  KBTS__FEATURE_ID_cv42, // Character Variant 42
+  KBTS__FEATURE_ID_cv43, // Character Variant 43
+  KBTS__FEATURE_ID_cv44, // Character Variant 44
+  KBTS__FEATURE_ID_cv45, // Character Variant 45
+  KBTS__FEATURE_ID_cv46, // Character Variant 46
+  KBTS__FEATURE_ID_cv47, // Character Variant 47
+  KBTS__FEATURE_ID_cv48, // Character Variant 48
+  KBTS__FEATURE_ID_cv49, // Character Variant 49
+  KBTS__FEATURE_ID_cv50, // Character Variant 50
+  KBTS__FEATURE_ID_cv51, // Character Variant 51
+  KBTS__FEATURE_ID_cv52, // Character Variant 52
+  KBTS__FEATURE_ID_cv53, // Character Variant 53
+  KBTS__FEATURE_ID_cv54, // Character Variant 54
+  KBTS__FEATURE_ID_cv55, // Character Variant 55
+  KBTS__FEATURE_ID_cv56, // Character Variant 56
+  KBTS__FEATURE_ID_cv57, // Character Variant 57
+  KBTS__FEATURE_ID_cv58, // Character Variant 58
+  KBTS__FEATURE_ID_cv59, // Character Variant 59
+  KBTS__FEATURE_ID_cv60, // Character Variant 60
+  KBTS__FEATURE_ID_cv61, // Character Variant 61
+  KBTS__FEATURE_ID_cv62, // Character Variant 62
+  KBTS__FEATURE_ID_cv63, // Character Variant 63
+  KBTS__FEATURE_ID_cv64, // Character Variant 64
+  KBTS__FEATURE_ID_cv65, // Character Variant 65
+  KBTS__FEATURE_ID_cv66, // Character Variant 66
+  KBTS__FEATURE_ID_cv67, // Character Variant 67
+  KBTS__FEATURE_ID_cv68, // Character Variant 68
+  KBTS__FEATURE_ID_cv69, // Character Variant 69
+  KBTS__FEATURE_ID_cv70, // Character Variant 70
+  KBTS__FEATURE_ID_cv71, // Character Variant 71
+  KBTS__FEATURE_ID_cv72, // Character Variant 72
+  KBTS__FEATURE_ID_cv73, // Character Variant 73
+  KBTS__FEATURE_ID_cv74, // Character Variant 74
+  KBTS__FEATURE_ID_cv75, // Character Variant 75
+  KBTS__FEATURE_ID_cv76, // Character Variant 76
+  KBTS__FEATURE_ID_cv77, // Character Variant 77
+  KBTS__FEATURE_ID_cv78, // Character Variant 78
+  KBTS__FEATURE_ID_cv79, // Character Variant 79
+  KBTS__FEATURE_ID_cv80, // Character Variant 80
+  KBTS__FEATURE_ID_cv81, // Character Variant 81
+  KBTS__FEATURE_ID_cv82, // Character Variant 82
+  KBTS__FEATURE_ID_cv83, // Character Variant 83
+  KBTS__FEATURE_ID_cv84, // Character Variant 84
+  KBTS__FEATURE_ID_cv85, // Character Variant 85
+  KBTS__FEATURE_ID_cv86, // Character Variant 86
+  KBTS__FEATURE_ID_cv87, // Character Variant 87
+  KBTS__FEATURE_ID_cv88, // Character Variant 88
+  KBTS__FEATURE_ID_cv89, // Character Variant 89
+  KBTS__FEATURE_ID_cv90, // Character Variant 90
+  KBTS__FEATURE_ID_cv91, // Character Variant 91
+  KBTS__FEATURE_ID_cv92, // Character Variant 92
+  KBTS__FEATURE_ID_cv93, // Character Variant 93
+  KBTS__FEATURE_ID_cv94, // Character Variant 94
+  KBTS__FEATURE_ID_cv95, // Character Variant 95
+  KBTS__FEATURE_ID_cv96, // Character Variant 96
+  KBTS__FEATURE_ID_cv97, // Character Variant 97
+  KBTS__FEATURE_ID_cv98, // Character Variant 98
+  KBTS__FEATURE_ID_cv99, // Character Variant 99
+  KBTS__FEATURE_ID_c2pc, // Petite Capitals From Capitals
+  KBTS__FEATURE_ID_c2sc, // Small Capitals From Capitals
+  KBTS__FEATURE_ID_dist, // Distances
+  KBTS__FEATURE_ID_dlig, // Discretionary Ligatures
+  KBTS__FEATURE_ID_dtls, // Dotless Forms
+  KBTS__FEATURE_ID_expt, // Expert Forms
+  KBTS__FEATURE_ID_falt, // Final Glyph on Line Alternates
+  KBTS__FEATURE_ID_flac, // Flattened Accent Forms
+  KBTS__FEATURE_ID_fwid, // Full Widths
+  KBTS__FEATURE_ID_haln, // Halant Forms
+  KBTS__FEATURE_ID_halt, // Alternate Half Widths
+  KBTS__FEATURE_ID_hist, // Historical Forms
+  KBTS__FEATURE_ID_hkna, // Horizontal Kana Alternates
+  KBTS__FEATURE_ID_hlig, // Historical Ligatures
+  KBTS__FEATURE_ID_hngl, // Hangul
+  KBTS__FEATURE_ID_hojo, // Hojo Kanji Forms (JIS X 0212-1990 Kanji Forms)
+  KBTS__FEATURE_ID_hwid, // Half Widths
+  KBTS__FEATURE_ID_ital, // Italics
+  KBTS__FEATURE_ID_jalt, // Justification Alternates
+  KBTS__FEATURE_ID_jp78, // JIS78 Forms
+  KBTS__FEATURE_ID_jp83, // JIS83 Forms
+  KBTS__FEATURE_ID_jp90, // JIS90 Forms
+  KBTS__FEATURE_ID_jp04, // JIS2004 Forms
+  KBTS__FEATURE_ID_kern, // Kerning
+  KBTS__FEATURE_ID_lfbd, // Left Bounds
+  KBTS__FEATURE_ID_liga, // Standard Ligatures
+  KBTS__FEATURE_ID_lnum, // Lining Figures
+  KBTS__FEATURE_ID_locl, // Localized Forms
+  KBTS__FEATURE_ID_ltra, // Left-to-right Alternates
+  KBTS__FEATURE_ID_ltrm, // Left-to-right Mirrored Forms
+  KBTS__FEATURE_ID_mark, // Mark Positioning
+  KBTS__FEATURE_ID_mgrk, // Mathematical Greek
+  KBTS__FEATURE_ID_mkmk, // Mark to Mark Positioning
+  KBTS__FEATURE_ID_mset, // Mark Positioning via Substitution
+  KBTS__FEATURE_ID_nalt, // Alternate Annotation Forms
+  KBTS__FEATURE_ID_nlck, // NLC Kanji Forms
+  KBTS__FEATURE_ID_nukt, // Nukta Forms
+  KBTS__FEATURE_ID_onum, // Oldstyle Figures
+  KBTS__FEATURE_ID_opbd, // Optical Bounds
+  KBTS__FEATURE_ID_ordn, // Ordinals
+  KBTS__FEATURE_ID_ornm, // Ornaments
+  KBTS__FEATURE_ID_palt, // Proportional Alternate Widths
+  KBTS__FEATURE_ID_pcap, // Petite Capitals
+  KBTS__FEATURE_ID_pkna, // Proportional Kana
+  KBTS__FEATURE_ID_pnum, // Proportional Figures
+  KBTS__FEATURE_ID_pres, // Pre-base Substitutions
+  KBTS__FEATURE_ID_psts, // Post-base Substitutions
+  KBTS__FEATURE_ID_pwid, // Proportional Widths
+  KBTS__FEATURE_ID_qwid, // Quarter Widths
+  KBTS__FEATURE_ID_rand, // Randomize
+  KBTS__FEATURE_ID_rclt, // Required Contextual Alternates
+  KBTS__FEATURE_ID_rkrf, // Rakar Forms
+  KBTS__FEATURE_ID_rlig, // Required Ligatures
+  KBTS__FEATURE_ID_rtbd, // Right Bounds
+  KBTS__FEATURE_ID_rtla, // Right-to-left Alternates
+  KBTS__FEATURE_ID_rtlm, // Right-to-left Mirrored Forms
+  KBTS__FEATURE_ID_ruby, // Ruby Notation Forms
+  KBTS__FEATURE_ID_rvrn, // Required Variation Alternates
+  KBTS__FEATURE_ID_salt, // Stylistic Alternates
+  KBTS__FEATURE_ID_sinf, // Scientific Inferiors
+  KBTS__FEATURE_ID_size, // Optical size
+  KBTS__FEATURE_ID_smcp, // Small Capitals
+  KBTS__FEATURE_ID_smpl, // Simplified Forms
+  KBTS__FEATURE_ID_ss01, // Stylistic Set 1
+  KBTS__FEATURE_ID_ss02, // Stylistic Set 2
+  KBTS__FEATURE_ID_ss03, // Stylistic Set 3
+  KBTS__FEATURE_ID_ss04, // Stylistic Set 4
+  KBTS__FEATURE_ID_ss05, // Stylistic Set 5
+  KBTS__FEATURE_ID_ss06, // Stylistic Set 6
+  KBTS__FEATURE_ID_ss07, // Stylistic Set 7
+  KBTS__FEATURE_ID_ss08, // Stylistic Set 8
+  KBTS__FEATURE_ID_ss09, // Stylistic Set 9
+  KBTS__FEATURE_ID_ss10, // Stylistic Set 10
+  KBTS__FEATURE_ID_ss11, // Stylistic Set 11
+  KBTS__FEATURE_ID_ss12, // Stylistic Set 12
+  KBTS__FEATURE_ID_ss13, // Stylistic Set 13
+  KBTS__FEATURE_ID_ss14, // Stylistic Set 14
+  KBTS__FEATURE_ID_ss15, // Stylistic Set 15
+  KBTS__FEATURE_ID_ss16, // Stylistic Set 16
+  KBTS__FEATURE_ID_ss17, // Stylistic Set 17
+  KBTS__FEATURE_ID_ss18, // Stylistic Set 18
+  KBTS__FEATURE_ID_ss19, // Stylistic Set 19
+  KBTS__FEATURE_ID_ss20, // Stylistic Set 20
+  KBTS__FEATURE_ID_ssty, // Math Script-style Alternates
+  KBTS__FEATURE_ID_stch, // Stretching Glyph Decomposition
+  KBTS__FEATURE_ID_subs, // Subscript
+  KBTS__FEATURE_ID_sups, // Superscript
+  KBTS__FEATURE_ID_swsh, // Swash
+  KBTS__FEATURE_ID_test, // Test features, only for development
+  KBTS__FEATURE_ID_titl, // Titling
+  KBTS__FEATURE_ID_tnam, // Traditional Name Forms
+  KBTS__FEATURE_ID_tnum, // Tabular Figures
+  KBTS__FEATURE_ID_trad, // Traditional Forms
+  KBTS__FEATURE_ID_twid, // Third Widths
+  KBTS__FEATURE_ID_unic, // Unicase
+  KBTS__FEATURE_ID_valt, // Alternate Vertical Metrics
+  KBTS__FEATURE_ID_vapk, // Kerning for Alternate Proportional Vertical Metrics
+  KBTS__FEATURE_ID_vatu, // Vattu Variants
+  KBTS__FEATURE_ID_vchw, // Vertical Contextual Half-width Spacing
+  KBTS__FEATURE_ID_vert, // Vertical Alternates
+  KBTS__FEATURE_ID_vhal, // Alternate Vertical Half Metrics
+  KBTS__FEATURE_ID_vkna, // Vertical Kana Alternates
+  KBTS__FEATURE_ID_vkrn, // Vertical Kerning
+  KBTS__FEATURE_ID_vpal, // Proportional Alternate Vertical Metrics
+  KBTS__FEATURE_ID_vrt2, // Vertical Alternates and Rotation
+  KBTS__FEATURE_ID_vrtr, // Vertical Alternates for Rotation
+  KBTS__FEATURE_ID_zero, // Slashed Zero
+  KBTS__FEATURE_ID_COUNT,
+};
+
 typedef struct kbts__feature_set
 {
-  kbts_u64 Flags[(KBTS_FEATURE_ID_COUNT + 63) / 64];
+  kbts_u64 Flags[(KBTS__FEATURE_ID_COUNT + 63) / 64];
 } kbts__feature_set;
-
 typedef kbts_u8 kbts__op_kind;
 enum kbts__op_kind_enum
 {
@@ -4760,255 +4802,255 @@ KBTS_EXPORT kbts_script kbts_ScriptTagToScript(kbts_script_tag Tag)
   return Result;
 }
 
-KBTS_EXPORT kbts_feature_id kbts_FeatureTagToId(kbts_feature_tag Tag)
+static kbts__feature_id kbts__FeatureTagToId(kbts_feature_tag Tag)
 {
-  kbts_feature_id Result = 0;
+  kbts__feature_id Result = 0;
   switch(Tag)
   {
-  case KBTS_FEATURE_TAG_isol: Result = KBTS_FEATURE_ID_isol; break;
-  case KBTS_FEATURE_TAG_fina: Result = KBTS_FEATURE_ID_fina; break;
-  case KBTS_FEATURE_TAG_fin2: Result = KBTS_FEATURE_ID_fin2; break;
-  case KBTS_FEATURE_TAG_fin3: Result = KBTS_FEATURE_ID_fin3; break;
-  case KBTS_FEATURE_TAG_medi: Result = KBTS_FEATURE_ID_medi; break;
-  case KBTS_FEATURE_TAG_med2: Result = KBTS_FEATURE_ID_med2; break;
-  case KBTS_FEATURE_TAG_init: Result = KBTS_FEATURE_ID_init; break;
-  case KBTS_FEATURE_TAG_ljmo: Result = KBTS_FEATURE_ID_ljmo; break;
-  case KBTS_FEATURE_TAG_vjmo: Result = KBTS_FEATURE_ID_vjmo; break;
-  case KBTS_FEATURE_TAG_tjmo: Result = KBTS_FEATURE_ID_tjmo; break;
-  case KBTS_FEATURE_TAG_rphf: Result = KBTS_FEATURE_ID_rphf; break;
-  case KBTS_FEATURE_TAG_blwf: Result = KBTS_FEATURE_ID_blwf; break;
-  case KBTS_FEATURE_TAG_half: Result = KBTS_FEATURE_ID_half; break;
-  case KBTS_FEATURE_TAG_pstf: Result = KBTS_FEATURE_ID_pstf; break;
-  case KBTS_FEATURE_TAG_abvf: Result = KBTS_FEATURE_ID_abvf; break;
-  case KBTS_FEATURE_TAG_pref: Result = KBTS_FEATURE_ID_pref; break;
-  case KBTS_FEATURE_TAG_numr: Result = KBTS_FEATURE_ID_numr; break;
-  case KBTS_FEATURE_TAG_frac: Result = KBTS_FEATURE_ID_frac; break;
-  case KBTS_FEATURE_TAG_dnom: Result = KBTS_FEATURE_ID_dnom; break;
-  case KBTS_FEATURE_TAG_cfar: Result = KBTS_FEATURE_ID_cfar; break;
-  case KBTS_FEATURE_TAG_aalt: Result = KBTS_FEATURE_ID_aalt; break;
-  case KBTS_FEATURE_TAG_abvm: Result = KBTS_FEATURE_ID_abvm; break;
-  case KBTS_FEATURE_TAG_abvs: Result = KBTS_FEATURE_ID_abvs; break;
-  case KBTS_FEATURE_TAG_afrc: Result = KBTS_FEATURE_ID_afrc; break;
-  case KBTS_FEATURE_TAG_akhn: Result = KBTS_FEATURE_ID_akhn; break;
-  case KBTS_FEATURE_TAG_apkn: Result = KBTS_FEATURE_ID_apkn; break;
-  case KBTS_FEATURE_TAG_blwm: Result = KBTS_FEATURE_ID_blwm; break;
-  case KBTS_FEATURE_TAG_blws: Result = KBTS_FEATURE_ID_blws; break;
-  case KBTS_FEATURE_TAG_calt: Result = KBTS_FEATURE_ID_calt; break;
-  case KBTS_FEATURE_TAG_case: Result = KBTS_FEATURE_ID_case; break;
-  case KBTS_FEATURE_TAG_ccmp: Result = KBTS_FEATURE_ID_ccmp; break;
-  case KBTS_FEATURE_TAG_chws: Result = KBTS_FEATURE_ID_chws; break;
-  case KBTS_FEATURE_TAG_cjct: Result = KBTS_FEATURE_ID_cjct; break;
-  case KBTS_FEATURE_TAG_clig: Result = KBTS_FEATURE_ID_clig; break;
-  case KBTS_FEATURE_TAG_cpct: Result = KBTS_FEATURE_ID_cpct; break;
-  case KBTS_FEATURE_TAG_cpsp: Result = KBTS_FEATURE_ID_cpsp; break;
-  case KBTS_FEATURE_TAG_cswh: Result = KBTS_FEATURE_ID_cswh; break;
-  case KBTS_FEATURE_TAG_curs: Result = KBTS_FEATURE_ID_curs; break;
-  case KBTS_FEATURE_TAG_cv01: Result = KBTS_FEATURE_ID_cv01; break;
-  case KBTS_FEATURE_TAG_cv02: Result = KBTS_FEATURE_ID_cv02; break;
-  case KBTS_FEATURE_TAG_cv03: Result = KBTS_FEATURE_ID_cv03; break;
-  case KBTS_FEATURE_TAG_cv04: Result = KBTS_FEATURE_ID_cv04; break;
-  case KBTS_FEATURE_TAG_cv05: Result = KBTS_FEATURE_ID_cv05; break;
-  case KBTS_FEATURE_TAG_cv06: Result = KBTS_FEATURE_ID_cv06; break;
-  case KBTS_FEATURE_TAG_cv07: Result = KBTS_FEATURE_ID_cv07; break;
-  case KBTS_FEATURE_TAG_cv08: Result = KBTS_FEATURE_ID_cv08; break;
-  case KBTS_FEATURE_TAG_cv09: Result = KBTS_FEATURE_ID_cv09; break;
-  case KBTS_FEATURE_TAG_cv10: Result = KBTS_FEATURE_ID_cv10; break;
-  case KBTS_FEATURE_TAG_cv11: Result = KBTS_FEATURE_ID_cv11; break;
-  case KBTS_FEATURE_TAG_cv12: Result = KBTS_FEATURE_ID_cv12; break;
-  case KBTS_FEATURE_TAG_cv13: Result = KBTS_FEATURE_ID_cv13; break;
-  case KBTS_FEATURE_TAG_cv14: Result = KBTS_FEATURE_ID_cv14; break;
-  case KBTS_FEATURE_TAG_cv15: Result = KBTS_FEATURE_ID_cv15; break;
-  case KBTS_FEATURE_TAG_cv16: Result = KBTS_FEATURE_ID_cv16; break;
-  case KBTS_FEATURE_TAG_cv17: Result = KBTS_FEATURE_ID_cv17; break;
-  case KBTS_FEATURE_TAG_cv18: Result = KBTS_FEATURE_ID_cv18; break;
-  case KBTS_FEATURE_TAG_cv19: Result = KBTS_FEATURE_ID_cv19; break;
-  case KBTS_FEATURE_TAG_cv20: Result = KBTS_FEATURE_ID_cv20; break;
-  case KBTS_FEATURE_TAG_cv21: Result = KBTS_FEATURE_ID_cv21; break;
-  case KBTS_FEATURE_TAG_cv22: Result = KBTS_FEATURE_ID_cv22; break;
-  case KBTS_FEATURE_TAG_cv23: Result = KBTS_FEATURE_ID_cv23; break;
-  case KBTS_FEATURE_TAG_cv24: Result = KBTS_FEATURE_ID_cv24; break;
-  case KBTS_FEATURE_TAG_cv25: Result = KBTS_FEATURE_ID_cv25; break;
-  case KBTS_FEATURE_TAG_cv26: Result = KBTS_FEATURE_ID_cv26; break;
-  case KBTS_FEATURE_TAG_cv27: Result = KBTS_FEATURE_ID_cv27; break;
-  case KBTS_FEATURE_TAG_cv28: Result = KBTS_FEATURE_ID_cv28; break;
-  case KBTS_FEATURE_TAG_cv29: Result = KBTS_FEATURE_ID_cv29; break;
-  case KBTS_FEATURE_TAG_cv30: Result = KBTS_FEATURE_ID_cv30; break;
-  case KBTS_FEATURE_TAG_cv31: Result = KBTS_FEATURE_ID_cv31; break;
-  case KBTS_FEATURE_TAG_cv32: Result = KBTS_FEATURE_ID_cv32; break;
-  case KBTS_FEATURE_TAG_cv33: Result = KBTS_FEATURE_ID_cv33; break;
-  case KBTS_FEATURE_TAG_cv34: Result = KBTS_FEATURE_ID_cv34; break;
-  case KBTS_FEATURE_TAG_cv35: Result = KBTS_FEATURE_ID_cv35; break;
-  case KBTS_FEATURE_TAG_cv36: Result = KBTS_FEATURE_ID_cv36; break;
-  case KBTS_FEATURE_TAG_cv37: Result = KBTS_FEATURE_ID_cv37; break;
-  case KBTS_FEATURE_TAG_cv38: Result = KBTS_FEATURE_ID_cv38; break;
-  case KBTS_FEATURE_TAG_cv39: Result = KBTS_FEATURE_ID_cv39; break;
-  case KBTS_FEATURE_TAG_cv40: Result = KBTS_FEATURE_ID_cv40; break;
-  case KBTS_FEATURE_TAG_cv41: Result = KBTS_FEATURE_ID_cv41; break;
-  case KBTS_FEATURE_TAG_cv42: Result = KBTS_FEATURE_ID_cv42; break;
-  case KBTS_FEATURE_TAG_cv43: Result = KBTS_FEATURE_ID_cv43; break;
-  case KBTS_FEATURE_TAG_cv44: Result = KBTS_FEATURE_ID_cv44; break;
-  case KBTS_FEATURE_TAG_cv45: Result = KBTS_FEATURE_ID_cv45; break;
-  case KBTS_FEATURE_TAG_cv46: Result = KBTS_FEATURE_ID_cv46; break;
-  case KBTS_FEATURE_TAG_cv47: Result = KBTS_FEATURE_ID_cv47; break;
-  case KBTS_FEATURE_TAG_cv48: Result = KBTS_FEATURE_ID_cv48; break;
-  case KBTS_FEATURE_TAG_cv49: Result = KBTS_FEATURE_ID_cv49; break;
-  case KBTS_FEATURE_TAG_cv50: Result = KBTS_FEATURE_ID_cv50; break;
-  case KBTS_FEATURE_TAG_cv51: Result = KBTS_FEATURE_ID_cv51; break;
-  case KBTS_FEATURE_TAG_cv52: Result = KBTS_FEATURE_ID_cv52; break;
-  case KBTS_FEATURE_TAG_cv53: Result = KBTS_FEATURE_ID_cv53; break;
-  case KBTS_FEATURE_TAG_cv54: Result = KBTS_FEATURE_ID_cv54; break;
-  case KBTS_FEATURE_TAG_cv55: Result = KBTS_FEATURE_ID_cv55; break;
-  case KBTS_FEATURE_TAG_cv56: Result = KBTS_FEATURE_ID_cv56; break;
-  case KBTS_FEATURE_TAG_cv57: Result = KBTS_FEATURE_ID_cv57; break;
-  case KBTS_FEATURE_TAG_cv58: Result = KBTS_FEATURE_ID_cv58; break;
-  case KBTS_FEATURE_TAG_cv59: Result = KBTS_FEATURE_ID_cv59; break;
-  case KBTS_FEATURE_TAG_cv60: Result = KBTS_FEATURE_ID_cv60; break;
-  case KBTS_FEATURE_TAG_cv61: Result = KBTS_FEATURE_ID_cv61; break;
-  case KBTS_FEATURE_TAG_cv62: Result = KBTS_FEATURE_ID_cv62; break;
-  case KBTS_FEATURE_TAG_cv63: Result = KBTS_FEATURE_ID_cv63; break;
-  case KBTS_FEATURE_TAG_cv64: Result = KBTS_FEATURE_ID_cv64; break;
-  case KBTS_FEATURE_TAG_cv65: Result = KBTS_FEATURE_ID_cv65; break;
-  case KBTS_FEATURE_TAG_cv66: Result = KBTS_FEATURE_ID_cv66; break;
-  case KBTS_FEATURE_TAG_cv67: Result = KBTS_FEATURE_ID_cv67; break;
-  case KBTS_FEATURE_TAG_cv68: Result = KBTS_FEATURE_ID_cv68; break;
-  case KBTS_FEATURE_TAG_cv69: Result = KBTS_FEATURE_ID_cv69; break;
-  case KBTS_FEATURE_TAG_cv70: Result = KBTS_FEATURE_ID_cv70; break;
-  case KBTS_FEATURE_TAG_cv71: Result = KBTS_FEATURE_ID_cv71; break;
-  case KBTS_FEATURE_TAG_cv72: Result = KBTS_FEATURE_ID_cv72; break;
-  case KBTS_FEATURE_TAG_cv73: Result = KBTS_FEATURE_ID_cv73; break;
-  case KBTS_FEATURE_TAG_cv74: Result = KBTS_FEATURE_ID_cv74; break;
-  case KBTS_FEATURE_TAG_cv75: Result = KBTS_FEATURE_ID_cv75; break;
-  case KBTS_FEATURE_TAG_cv76: Result = KBTS_FEATURE_ID_cv76; break;
-  case KBTS_FEATURE_TAG_cv77: Result = KBTS_FEATURE_ID_cv77; break;
-  case KBTS_FEATURE_TAG_cv78: Result = KBTS_FEATURE_ID_cv78; break;
-  case KBTS_FEATURE_TAG_cv79: Result = KBTS_FEATURE_ID_cv79; break;
-  case KBTS_FEATURE_TAG_cv80: Result = KBTS_FEATURE_ID_cv80; break;
-  case KBTS_FEATURE_TAG_cv81: Result = KBTS_FEATURE_ID_cv81; break;
-  case KBTS_FEATURE_TAG_cv82: Result = KBTS_FEATURE_ID_cv82; break;
-  case KBTS_FEATURE_TAG_cv83: Result = KBTS_FEATURE_ID_cv83; break;
-  case KBTS_FEATURE_TAG_cv84: Result = KBTS_FEATURE_ID_cv84; break;
-  case KBTS_FEATURE_TAG_cv85: Result = KBTS_FEATURE_ID_cv85; break;
-  case KBTS_FEATURE_TAG_cv86: Result = KBTS_FEATURE_ID_cv86; break;
-  case KBTS_FEATURE_TAG_cv87: Result = KBTS_FEATURE_ID_cv87; break;
-  case KBTS_FEATURE_TAG_cv88: Result = KBTS_FEATURE_ID_cv88; break;
-  case KBTS_FEATURE_TAG_cv89: Result = KBTS_FEATURE_ID_cv89; break;
-  case KBTS_FEATURE_TAG_cv90: Result = KBTS_FEATURE_ID_cv90; break;
-  case KBTS_FEATURE_TAG_cv91: Result = KBTS_FEATURE_ID_cv91; break;
-  case KBTS_FEATURE_TAG_cv92: Result = KBTS_FEATURE_ID_cv92; break;
-  case KBTS_FEATURE_TAG_cv93: Result = KBTS_FEATURE_ID_cv93; break;
-  case KBTS_FEATURE_TAG_cv94: Result = KBTS_FEATURE_ID_cv94; break;
-  case KBTS_FEATURE_TAG_cv95: Result = KBTS_FEATURE_ID_cv95; break;
-  case KBTS_FEATURE_TAG_cv96: Result = KBTS_FEATURE_ID_cv96; break;
-  case KBTS_FEATURE_TAG_cv97: Result = KBTS_FEATURE_ID_cv97; break;
-  case KBTS_FEATURE_TAG_cv98: Result = KBTS_FEATURE_ID_cv98; break;
-  case KBTS_FEATURE_TAG_cv99: Result = KBTS_FEATURE_ID_cv99; break;
-  case KBTS_FEATURE_TAG_c2pc: Result = KBTS_FEATURE_ID_c2pc; break;
-  case KBTS_FEATURE_TAG_c2sc: Result = KBTS_FEATURE_ID_c2sc; break;
-  case KBTS_FEATURE_TAG_dist: Result = KBTS_FEATURE_ID_dist; break;
-  case KBTS_FEATURE_TAG_dlig: Result = KBTS_FEATURE_ID_dlig; break;
-  case KBTS_FEATURE_TAG_dtls: Result = KBTS_FEATURE_ID_dtls; break;
-  case KBTS_FEATURE_TAG_expt: Result = KBTS_FEATURE_ID_expt; break;
-  case KBTS_FEATURE_TAG_falt: Result = KBTS_FEATURE_ID_falt; break;
-  case KBTS_FEATURE_TAG_flac: Result = KBTS_FEATURE_ID_flac; break;
-  case KBTS_FEATURE_TAG_fwid: Result = KBTS_FEATURE_ID_fwid; break;
-  case KBTS_FEATURE_TAG_haln: Result = KBTS_FEATURE_ID_haln; break;
-  case KBTS_FEATURE_TAG_halt: Result = KBTS_FEATURE_ID_halt; break;
-  case KBTS_FEATURE_TAG_hist: Result = KBTS_FEATURE_ID_hist; break;
-  case KBTS_FEATURE_TAG_hkna: Result = KBTS_FEATURE_ID_hkna; break;
-  case KBTS_FEATURE_TAG_hlig: Result = KBTS_FEATURE_ID_hlig; break;
-  case KBTS_FEATURE_TAG_hngl: Result = KBTS_FEATURE_ID_hngl; break;
-  case KBTS_FEATURE_TAG_hojo: Result = KBTS_FEATURE_ID_hojo; break;
-  case KBTS_FEATURE_TAG_hwid: Result = KBTS_FEATURE_ID_hwid; break;
-  case KBTS_FEATURE_TAG_ital: Result = KBTS_FEATURE_ID_ital; break;
-  case KBTS_FEATURE_TAG_jalt: Result = KBTS_FEATURE_ID_jalt; break;
-  case KBTS_FEATURE_TAG_jp78: Result = KBTS_FEATURE_ID_jp78; break;
-  case KBTS_FEATURE_TAG_jp83: Result = KBTS_FEATURE_ID_jp83; break;
-  case KBTS_FEATURE_TAG_jp90: Result = KBTS_FEATURE_ID_jp90; break;
-  case KBTS_FEATURE_TAG_jp04: Result = KBTS_FEATURE_ID_jp04; break;
-  case KBTS_FEATURE_TAG_kern: Result = KBTS_FEATURE_ID_kern; break;
-  case KBTS_FEATURE_TAG_lfbd: Result = KBTS_FEATURE_ID_lfbd; break;
-  case KBTS_FEATURE_TAG_liga: Result = KBTS_FEATURE_ID_liga; break;
-  case KBTS_FEATURE_TAG_lnum: Result = KBTS_FEATURE_ID_lnum; break;
-  case KBTS_FEATURE_TAG_locl: Result = KBTS_FEATURE_ID_locl; break;
-  case KBTS_FEATURE_TAG_ltra: Result = KBTS_FEATURE_ID_ltra; break;
-  case KBTS_FEATURE_TAG_ltrm: Result = KBTS_FEATURE_ID_ltrm; break;
-  case KBTS_FEATURE_TAG_mark: Result = KBTS_FEATURE_ID_mark; break;
-  case KBTS_FEATURE_TAG_mgrk: Result = KBTS_FEATURE_ID_mgrk; break;
-  case KBTS_FEATURE_TAG_mkmk: Result = KBTS_FEATURE_ID_mkmk; break;
-  case KBTS_FEATURE_TAG_mset: Result = KBTS_FEATURE_ID_mset; break;
-  case KBTS_FEATURE_TAG_nalt: Result = KBTS_FEATURE_ID_nalt; break;
-  case KBTS_FEATURE_TAG_nlck: Result = KBTS_FEATURE_ID_nlck; break;
-  case KBTS_FEATURE_TAG_nukt: Result = KBTS_FEATURE_ID_nukt; break;
-  case KBTS_FEATURE_TAG_onum: Result = KBTS_FEATURE_ID_onum; break;
-  case KBTS_FEATURE_TAG_opbd: Result = KBTS_FEATURE_ID_opbd; break;
-  case KBTS_FEATURE_TAG_ordn: Result = KBTS_FEATURE_ID_ordn; break;
-  case KBTS_FEATURE_TAG_ornm: Result = KBTS_FEATURE_ID_ornm; break;
-  case KBTS_FEATURE_TAG_palt: Result = KBTS_FEATURE_ID_palt; break;
-  case KBTS_FEATURE_TAG_pcap: Result = KBTS_FEATURE_ID_pcap; break;
-  case KBTS_FEATURE_TAG_pkna: Result = KBTS_FEATURE_ID_pkna; break;
-  case KBTS_FEATURE_TAG_pnum: Result = KBTS_FEATURE_ID_pnum; break;
-  case KBTS_FEATURE_TAG_pres: Result = KBTS_FEATURE_ID_pres; break;
-  case KBTS_FEATURE_TAG_psts: Result = KBTS_FEATURE_ID_psts; break;
-  case KBTS_FEATURE_TAG_pwid: Result = KBTS_FEATURE_ID_pwid; break;
-  case KBTS_FEATURE_TAG_qwid: Result = KBTS_FEATURE_ID_qwid; break;
-  case KBTS_FEATURE_TAG_rand: Result = KBTS_FEATURE_ID_rand; break;
-  case KBTS_FEATURE_TAG_rclt: Result = KBTS_FEATURE_ID_rclt; break;
-  case KBTS_FEATURE_TAG_rkrf: Result = KBTS_FEATURE_ID_rkrf; break;
-  case KBTS_FEATURE_TAG_rlig: Result = KBTS_FEATURE_ID_rlig; break;
-  case KBTS_FEATURE_TAG_rtbd: Result = KBTS_FEATURE_ID_rtbd; break;
-  case KBTS_FEATURE_TAG_rtla: Result = KBTS_FEATURE_ID_rtla; break;
-  case KBTS_FEATURE_TAG_rtlm: Result = KBTS_FEATURE_ID_rtlm; break;
-  case KBTS_FEATURE_TAG_ruby: Result = KBTS_FEATURE_ID_ruby; break;
-  case KBTS_FEATURE_TAG_rvrn: Result = KBTS_FEATURE_ID_rvrn; break;
-  case KBTS_FEATURE_TAG_salt: Result = KBTS_FEATURE_ID_salt; break;
-  case KBTS_FEATURE_TAG_sinf: Result = KBTS_FEATURE_ID_sinf; break;
-  case KBTS_FEATURE_TAG_size: Result = KBTS_FEATURE_ID_size; break;
-  case KBTS_FEATURE_TAG_smcp: Result = KBTS_FEATURE_ID_smcp; break;
-  case KBTS_FEATURE_TAG_smpl: Result = KBTS_FEATURE_ID_smpl; break;
-  case KBTS_FEATURE_TAG_ss01: Result = KBTS_FEATURE_ID_ss01; break;
-  case KBTS_FEATURE_TAG_ss02: Result = KBTS_FEATURE_ID_ss02; break;
-  case KBTS_FEATURE_TAG_ss03: Result = KBTS_FEATURE_ID_ss03; break;
-  case KBTS_FEATURE_TAG_ss04: Result = KBTS_FEATURE_ID_ss04; break;
-  case KBTS_FEATURE_TAG_ss05: Result = KBTS_FEATURE_ID_ss05; break;
-  case KBTS_FEATURE_TAG_ss06: Result = KBTS_FEATURE_ID_ss06; break;
-  case KBTS_FEATURE_TAG_ss07: Result = KBTS_FEATURE_ID_ss07; break;
-  case KBTS_FEATURE_TAG_ss08: Result = KBTS_FEATURE_ID_ss08; break;
-  case KBTS_FEATURE_TAG_ss09: Result = KBTS_FEATURE_ID_ss09; break;
-  case KBTS_FEATURE_TAG_ss10: Result = KBTS_FEATURE_ID_ss10; break;
-  case KBTS_FEATURE_TAG_ss11: Result = KBTS_FEATURE_ID_ss11; break;
-  case KBTS_FEATURE_TAG_ss12: Result = KBTS_FEATURE_ID_ss12; break;
-  case KBTS_FEATURE_TAG_ss13: Result = KBTS_FEATURE_ID_ss13; break;
-  case KBTS_FEATURE_TAG_ss14: Result = KBTS_FEATURE_ID_ss14; break;
-  case KBTS_FEATURE_TAG_ss15: Result = KBTS_FEATURE_ID_ss15; break;
-  case KBTS_FEATURE_TAG_ss16: Result = KBTS_FEATURE_ID_ss16; break;
-  case KBTS_FEATURE_TAG_ss17: Result = KBTS_FEATURE_ID_ss17; break;
-  case KBTS_FEATURE_TAG_ss18: Result = KBTS_FEATURE_ID_ss18; break;
-  case KBTS_FEATURE_TAG_ss19: Result = KBTS_FEATURE_ID_ss19; break;
-  case KBTS_FEATURE_TAG_ss20: Result = KBTS_FEATURE_ID_ss20; break;
-  case KBTS_FEATURE_TAG_ssty: Result = KBTS_FEATURE_ID_ssty; break;
-  case KBTS_FEATURE_TAG_stch: Result = KBTS_FEATURE_ID_stch; break;
-  case KBTS_FEATURE_TAG_subs: Result = KBTS_FEATURE_ID_subs; break;
-  case KBTS_FEATURE_TAG_sups: Result = KBTS_FEATURE_ID_sups; break;
-  case KBTS_FEATURE_TAG_swsh: Result = KBTS_FEATURE_ID_swsh; break;
-  case KBTS_FEATURE_TAG_test: Result = KBTS_FEATURE_ID_test; break;
-  case KBTS_FEATURE_TAG_titl: Result = KBTS_FEATURE_ID_titl; break;
-  case KBTS_FEATURE_TAG_tnam: Result = KBTS_FEATURE_ID_tnam; break;
-  case KBTS_FEATURE_TAG_tnum: Result = KBTS_FEATURE_ID_tnum; break;
-  case KBTS_FEATURE_TAG_trad: Result = KBTS_FEATURE_ID_trad; break;
-  case KBTS_FEATURE_TAG_twid: Result = KBTS_FEATURE_ID_twid; break;
-  case KBTS_FEATURE_TAG_unic: Result = KBTS_FEATURE_ID_unic; break;
-  case KBTS_FEATURE_TAG_valt: Result = KBTS_FEATURE_ID_valt; break;
-  case KBTS_FEATURE_TAG_vapk: Result = KBTS_FEATURE_ID_vapk; break;
-  case KBTS_FEATURE_TAG_vatu: Result = KBTS_FEATURE_ID_vatu; break;
-  case KBTS_FEATURE_TAG_vchw: Result = KBTS_FEATURE_ID_vchw; break;
-  case KBTS_FEATURE_TAG_vert: Result = KBTS_FEATURE_ID_vert; break;
-  case KBTS_FEATURE_TAG_vhal: Result = KBTS_FEATURE_ID_vhal; break;
-  case KBTS_FEATURE_TAG_vkna: Result = KBTS_FEATURE_ID_vkna; break;
-  case KBTS_FEATURE_TAG_vkrn: Result = KBTS_FEATURE_ID_vkrn; break;
-  case KBTS_FEATURE_TAG_vpal: Result = KBTS_FEATURE_ID_vpal; break;
-  case KBTS_FEATURE_TAG_vrt2: Result = KBTS_FEATURE_ID_vrt2; break;
-  case KBTS_FEATURE_TAG_vrtr: Result = KBTS_FEATURE_ID_vrtr; break;
-  case KBTS_FEATURE_TAG_zero: Result = KBTS_FEATURE_ID_zero; break;
+  case KBTS_FEATURE_TAG_isol: Result = KBTS__FEATURE_ID_isol; break;
+  case KBTS_FEATURE_TAG_fina: Result = KBTS__FEATURE_ID_fina; break;
+  case KBTS_FEATURE_TAG_fin2: Result = KBTS__FEATURE_ID_fin2; break;
+  case KBTS_FEATURE_TAG_fin3: Result = KBTS__FEATURE_ID_fin3; break;
+  case KBTS_FEATURE_TAG_medi: Result = KBTS__FEATURE_ID_medi; break;
+  case KBTS_FEATURE_TAG_med2: Result = KBTS__FEATURE_ID_med2; break;
+  case KBTS_FEATURE_TAG_init: Result = KBTS__FEATURE_ID_init; break;
+  case KBTS_FEATURE_TAG_ljmo: Result = KBTS__FEATURE_ID_ljmo; break;
+  case KBTS_FEATURE_TAG_vjmo: Result = KBTS__FEATURE_ID_vjmo; break;
+  case KBTS_FEATURE_TAG_tjmo: Result = KBTS__FEATURE_ID_tjmo; break;
+  case KBTS_FEATURE_TAG_rphf: Result = KBTS__FEATURE_ID_rphf; break;
+  case KBTS_FEATURE_TAG_blwf: Result = KBTS__FEATURE_ID_blwf; break;
+  case KBTS_FEATURE_TAG_half: Result = KBTS__FEATURE_ID_half; break;
+  case KBTS_FEATURE_TAG_pstf: Result = KBTS__FEATURE_ID_pstf; break;
+  case KBTS_FEATURE_TAG_abvf: Result = KBTS__FEATURE_ID_abvf; break;
+  case KBTS_FEATURE_TAG_pref: Result = KBTS__FEATURE_ID_pref; break;
+  case KBTS_FEATURE_TAG_numr: Result = KBTS__FEATURE_ID_numr; break;
+  case KBTS_FEATURE_TAG_frac: Result = KBTS__FEATURE_ID_frac; break;
+  case KBTS_FEATURE_TAG_dnom: Result = KBTS__FEATURE_ID_dnom; break;
+  case KBTS_FEATURE_TAG_cfar: Result = KBTS__FEATURE_ID_cfar; break;
+  case KBTS_FEATURE_TAG_aalt: Result = KBTS__FEATURE_ID_aalt; break;
+  case KBTS_FEATURE_TAG_abvm: Result = KBTS__FEATURE_ID_abvm; break;
+  case KBTS_FEATURE_TAG_abvs: Result = KBTS__FEATURE_ID_abvs; break;
+  case KBTS_FEATURE_TAG_afrc: Result = KBTS__FEATURE_ID_afrc; break;
+  case KBTS_FEATURE_TAG_akhn: Result = KBTS__FEATURE_ID_akhn; break;
+  case KBTS_FEATURE_TAG_apkn: Result = KBTS__FEATURE_ID_apkn; break;
+  case KBTS_FEATURE_TAG_blwm: Result = KBTS__FEATURE_ID_blwm; break;
+  case KBTS_FEATURE_TAG_blws: Result = KBTS__FEATURE_ID_blws; break;
+  case KBTS_FEATURE_TAG_calt: Result = KBTS__FEATURE_ID_calt; break;
+  case KBTS_FEATURE_TAG_case: Result = KBTS__FEATURE_ID_case; break;
+  case KBTS_FEATURE_TAG_ccmp: Result = KBTS__FEATURE_ID_ccmp; break;
+  case KBTS_FEATURE_TAG_chws: Result = KBTS__FEATURE_ID_chws; break;
+  case KBTS_FEATURE_TAG_cjct: Result = KBTS__FEATURE_ID_cjct; break;
+  case KBTS_FEATURE_TAG_clig: Result = KBTS__FEATURE_ID_clig; break;
+  case KBTS_FEATURE_TAG_cpct: Result = KBTS__FEATURE_ID_cpct; break;
+  case KBTS_FEATURE_TAG_cpsp: Result = KBTS__FEATURE_ID_cpsp; break;
+  case KBTS_FEATURE_TAG_cswh: Result = KBTS__FEATURE_ID_cswh; break;
+  case KBTS_FEATURE_TAG_curs: Result = KBTS__FEATURE_ID_curs; break;
+  case KBTS_FEATURE_TAG_cv01: Result = KBTS__FEATURE_ID_cv01; break;
+  case KBTS_FEATURE_TAG_cv02: Result = KBTS__FEATURE_ID_cv02; break;
+  case KBTS_FEATURE_TAG_cv03: Result = KBTS__FEATURE_ID_cv03; break;
+  case KBTS_FEATURE_TAG_cv04: Result = KBTS__FEATURE_ID_cv04; break;
+  case KBTS_FEATURE_TAG_cv05: Result = KBTS__FEATURE_ID_cv05; break;
+  case KBTS_FEATURE_TAG_cv06: Result = KBTS__FEATURE_ID_cv06; break;
+  case KBTS_FEATURE_TAG_cv07: Result = KBTS__FEATURE_ID_cv07; break;
+  case KBTS_FEATURE_TAG_cv08: Result = KBTS__FEATURE_ID_cv08; break;
+  case KBTS_FEATURE_TAG_cv09: Result = KBTS__FEATURE_ID_cv09; break;
+  case KBTS_FEATURE_TAG_cv10: Result = KBTS__FEATURE_ID_cv10; break;
+  case KBTS_FEATURE_TAG_cv11: Result = KBTS__FEATURE_ID_cv11; break;
+  case KBTS_FEATURE_TAG_cv12: Result = KBTS__FEATURE_ID_cv12; break;
+  case KBTS_FEATURE_TAG_cv13: Result = KBTS__FEATURE_ID_cv13; break;
+  case KBTS_FEATURE_TAG_cv14: Result = KBTS__FEATURE_ID_cv14; break;
+  case KBTS_FEATURE_TAG_cv15: Result = KBTS__FEATURE_ID_cv15; break;
+  case KBTS_FEATURE_TAG_cv16: Result = KBTS__FEATURE_ID_cv16; break;
+  case KBTS_FEATURE_TAG_cv17: Result = KBTS__FEATURE_ID_cv17; break;
+  case KBTS_FEATURE_TAG_cv18: Result = KBTS__FEATURE_ID_cv18; break;
+  case KBTS_FEATURE_TAG_cv19: Result = KBTS__FEATURE_ID_cv19; break;
+  case KBTS_FEATURE_TAG_cv20: Result = KBTS__FEATURE_ID_cv20; break;
+  case KBTS_FEATURE_TAG_cv21: Result = KBTS__FEATURE_ID_cv21; break;
+  case KBTS_FEATURE_TAG_cv22: Result = KBTS__FEATURE_ID_cv22; break;
+  case KBTS_FEATURE_TAG_cv23: Result = KBTS__FEATURE_ID_cv23; break;
+  case KBTS_FEATURE_TAG_cv24: Result = KBTS__FEATURE_ID_cv24; break;
+  case KBTS_FEATURE_TAG_cv25: Result = KBTS__FEATURE_ID_cv25; break;
+  case KBTS_FEATURE_TAG_cv26: Result = KBTS__FEATURE_ID_cv26; break;
+  case KBTS_FEATURE_TAG_cv27: Result = KBTS__FEATURE_ID_cv27; break;
+  case KBTS_FEATURE_TAG_cv28: Result = KBTS__FEATURE_ID_cv28; break;
+  case KBTS_FEATURE_TAG_cv29: Result = KBTS__FEATURE_ID_cv29; break;
+  case KBTS_FEATURE_TAG_cv30: Result = KBTS__FEATURE_ID_cv30; break;
+  case KBTS_FEATURE_TAG_cv31: Result = KBTS__FEATURE_ID_cv31; break;
+  case KBTS_FEATURE_TAG_cv32: Result = KBTS__FEATURE_ID_cv32; break;
+  case KBTS_FEATURE_TAG_cv33: Result = KBTS__FEATURE_ID_cv33; break;
+  case KBTS_FEATURE_TAG_cv34: Result = KBTS__FEATURE_ID_cv34; break;
+  case KBTS_FEATURE_TAG_cv35: Result = KBTS__FEATURE_ID_cv35; break;
+  case KBTS_FEATURE_TAG_cv36: Result = KBTS__FEATURE_ID_cv36; break;
+  case KBTS_FEATURE_TAG_cv37: Result = KBTS__FEATURE_ID_cv37; break;
+  case KBTS_FEATURE_TAG_cv38: Result = KBTS__FEATURE_ID_cv38; break;
+  case KBTS_FEATURE_TAG_cv39: Result = KBTS__FEATURE_ID_cv39; break;
+  case KBTS_FEATURE_TAG_cv40: Result = KBTS__FEATURE_ID_cv40; break;
+  case KBTS_FEATURE_TAG_cv41: Result = KBTS__FEATURE_ID_cv41; break;
+  case KBTS_FEATURE_TAG_cv42: Result = KBTS__FEATURE_ID_cv42; break;
+  case KBTS_FEATURE_TAG_cv43: Result = KBTS__FEATURE_ID_cv43; break;
+  case KBTS_FEATURE_TAG_cv44: Result = KBTS__FEATURE_ID_cv44; break;
+  case KBTS_FEATURE_TAG_cv45: Result = KBTS__FEATURE_ID_cv45; break;
+  case KBTS_FEATURE_TAG_cv46: Result = KBTS__FEATURE_ID_cv46; break;
+  case KBTS_FEATURE_TAG_cv47: Result = KBTS__FEATURE_ID_cv47; break;
+  case KBTS_FEATURE_TAG_cv48: Result = KBTS__FEATURE_ID_cv48; break;
+  case KBTS_FEATURE_TAG_cv49: Result = KBTS__FEATURE_ID_cv49; break;
+  case KBTS_FEATURE_TAG_cv50: Result = KBTS__FEATURE_ID_cv50; break;
+  case KBTS_FEATURE_TAG_cv51: Result = KBTS__FEATURE_ID_cv51; break;
+  case KBTS_FEATURE_TAG_cv52: Result = KBTS__FEATURE_ID_cv52; break;
+  case KBTS_FEATURE_TAG_cv53: Result = KBTS__FEATURE_ID_cv53; break;
+  case KBTS_FEATURE_TAG_cv54: Result = KBTS__FEATURE_ID_cv54; break;
+  case KBTS_FEATURE_TAG_cv55: Result = KBTS__FEATURE_ID_cv55; break;
+  case KBTS_FEATURE_TAG_cv56: Result = KBTS__FEATURE_ID_cv56; break;
+  case KBTS_FEATURE_TAG_cv57: Result = KBTS__FEATURE_ID_cv57; break;
+  case KBTS_FEATURE_TAG_cv58: Result = KBTS__FEATURE_ID_cv58; break;
+  case KBTS_FEATURE_TAG_cv59: Result = KBTS__FEATURE_ID_cv59; break;
+  case KBTS_FEATURE_TAG_cv60: Result = KBTS__FEATURE_ID_cv60; break;
+  case KBTS_FEATURE_TAG_cv61: Result = KBTS__FEATURE_ID_cv61; break;
+  case KBTS_FEATURE_TAG_cv62: Result = KBTS__FEATURE_ID_cv62; break;
+  case KBTS_FEATURE_TAG_cv63: Result = KBTS__FEATURE_ID_cv63; break;
+  case KBTS_FEATURE_TAG_cv64: Result = KBTS__FEATURE_ID_cv64; break;
+  case KBTS_FEATURE_TAG_cv65: Result = KBTS__FEATURE_ID_cv65; break;
+  case KBTS_FEATURE_TAG_cv66: Result = KBTS__FEATURE_ID_cv66; break;
+  case KBTS_FEATURE_TAG_cv67: Result = KBTS__FEATURE_ID_cv67; break;
+  case KBTS_FEATURE_TAG_cv68: Result = KBTS__FEATURE_ID_cv68; break;
+  case KBTS_FEATURE_TAG_cv69: Result = KBTS__FEATURE_ID_cv69; break;
+  case KBTS_FEATURE_TAG_cv70: Result = KBTS__FEATURE_ID_cv70; break;
+  case KBTS_FEATURE_TAG_cv71: Result = KBTS__FEATURE_ID_cv71; break;
+  case KBTS_FEATURE_TAG_cv72: Result = KBTS__FEATURE_ID_cv72; break;
+  case KBTS_FEATURE_TAG_cv73: Result = KBTS__FEATURE_ID_cv73; break;
+  case KBTS_FEATURE_TAG_cv74: Result = KBTS__FEATURE_ID_cv74; break;
+  case KBTS_FEATURE_TAG_cv75: Result = KBTS__FEATURE_ID_cv75; break;
+  case KBTS_FEATURE_TAG_cv76: Result = KBTS__FEATURE_ID_cv76; break;
+  case KBTS_FEATURE_TAG_cv77: Result = KBTS__FEATURE_ID_cv77; break;
+  case KBTS_FEATURE_TAG_cv78: Result = KBTS__FEATURE_ID_cv78; break;
+  case KBTS_FEATURE_TAG_cv79: Result = KBTS__FEATURE_ID_cv79; break;
+  case KBTS_FEATURE_TAG_cv80: Result = KBTS__FEATURE_ID_cv80; break;
+  case KBTS_FEATURE_TAG_cv81: Result = KBTS__FEATURE_ID_cv81; break;
+  case KBTS_FEATURE_TAG_cv82: Result = KBTS__FEATURE_ID_cv82; break;
+  case KBTS_FEATURE_TAG_cv83: Result = KBTS__FEATURE_ID_cv83; break;
+  case KBTS_FEATURE_TAG_cv84: Result = KBTS__FEATURE_ID_cv84; break;
+  case KBTS_FEATURE_TAG_cv85: Result = KBTS__FEATURE_ID_cv85; break;
+  case KBTS_FEATURE_TAG_cv86: Result = KBTS__FEATURE_ID_cv86; break;
+  case KBTS_FEATURE_TAG_cv87: Result = KBTS__FEATURE_ID_cv87; break;
+  case KBTS_FEATURE_TAG_cv88: Result = KBTS__FEATURE_ID_cv88; break;
+  case KBTS_FEATURE_TAG_cv89: Result = KBTS__FEATURE_ID_cv89; break;
+  case KBTS_FEATURE_TAG_cv90: Result = KBTS__FEATURE_ID_cv90; break;
+  case KBTS_FEATURE_TAG_cv91: Result = KBTS__FEATURE_ID_cv91; break;
+  case KBTS_FEATURE_TAG_cv92: Result = KBTS__FEATURE_ID_cv92; break;
+  case KBTS_FEATURE_TAG_cv93: Result = KBTS__FEATURE_ID_cv93; break;
+  case KBTS_FEATURE_TAG_cv94: Result = KBTS__FEATURE_ID_cv94; break;
+  case KBTS_FEATURE_TAG_cv95: Result = KBTS__FEATURE_ID_cv95; break;
+  case KBTS_FEATURE_TAG_cv96: Result = KBTS__FEATURE_ID_cv96; break;
+  case KBTS_FEATURE_TAG_cv97: Result = KBTS__FEATURE_ID_cv97; break;
+  case KBTS_FEATURE_TAG_cv98: Result = KBTS__FEATURE_ID_cv98; break;
+  case KBTS_FEATURE_TAG_cv99: Result = KBTS__FEATURE_ID_cv99; break;
+  case KBTS_FEATURE_TAG_c2pc: Result = KBTS__FEATURE_ID_c2pc; break;
+  case KBTS_FEATURE_TAG_c2sc: Result = KBTS__FEATURE_ID_c2sc; break;
+  case KBTS_FEATURE_TAG_dist: Result = KBTS__FEATURE_ID_dist; break;
+  case KBTS_FEATURE_TAG_dlig: Result = KBTS__FEATURE_ID_dlig; break;
+  case KBTS_FEATURE_TAG_dtls: Result = KBTS__FEATURE_ID_dtls; break;
+  case KBTS_FEATURE_TAG_expt: Result = KBTS__FEATURE_ID_expt; break;
+  case KBTS_FEATURE_TAG_falt: Result = KBTS__FEATURE_ID_falt; break;
+  case KBTS_FEATURE_TAG_flac: Result = KBTS__FEATURE_ID_flac; break;
+  case KBTS_FEATURE_TAG_fwid: Result = KBTS__FEATURE_ID_fwid; break;
+  case KBTS_FEATURE_TAG_haln: Result = KBTS__FEATURE_ID_haln; break;
+  case KBTS_FEATURE_TAG_halt: Result = KBTS__FEATURE_ID_halt; break;
+  case KBTS_FEATURE_TAG_hist: Result = KBTS__FEATURE_ID_hist; break;
+  case KBTS_FEATURE_TAG_hkna: Result = KBTS__FEATURE_ID_hkna; break;
+  case KBTS_FEATURE_TAG_hlig: Result = KBTS__FEATURE_ID_hlig; break;
+  case KBTS_FEATURE_TAG_hngl: Result = KBTS__FEATURE_ID_hngl; break;
+  case KBTS_FEATURE_TAG_hojo: Result = KBTS__FEATURE_ID_hojo; break;
+  case KBTS_FEATURE_TAG_hwid: Result = KBTS__FEATURE_ID_hwid; break;
+  case KBTS_FEATURE_TAG_ital: Result = KBTS__FEATURE_ID_ital; break;
+  case KBTS_FEATURE_TAG_jalt: Result = KBTS__FEATURE_ID_jalt; break;
+  case KBTS_FEATURE_TAG_jp78: Result = KBTS__FEATURE_ID_jp78; break;
+  case KBTS_FEATURE_TAG_jp83: Result = KBTS__FEATURE_ID_jp83; break;
+  case KBTS_FEATURE_TAG_jp90: Result = KBTS__FEATURE_ID_jp90; break;
+  case KBTS_FEATURE_TAG_jp04: Result = KBTS__FEATURE_ID_jp04; break;
+  case KBTS_FEATURE_TAG_kern: Result = KBTS__FEATURE_ID_kern; break;
+  case KBTS_FEATURE_TAG_lfbd: Result = KBTS__FEATURE_ID_lfbd; break;
+  case KBTS_FEATURE_TAG_liga: Result = KBTS__FEATURE_ID_liga; break;
+  case KBTS_FEATURE_TAG_lnum: Result = KBTS__FEATURE_ID_lnum; break;
+  case KBTS_FEATURE_TAG_locl: Result = KBTS__FEATURE_ID_locl; break;
+  case KBTS_FEATURE_TAG_ltra: Result = KBTS__FEATURE_ID_ltra; break;
+  case KBTS_FEATURE_TAG_ltrm: Result = KBTS__FEATURE_ID_ltrm; break;
+  case KBTS_FEATURE_TAG_mark: Result = KBTS__FEATURE_ID_mark; break;
+  case KBTS_FEATURE_TAG_mgrk: Result = KBTS__FEATURE_ID_mgrk; break;
+  case KBTS_FEATURE_TAG_mkmk: Result = KBTS__FEATURE_ID_mkmk; break;
+  case KBTS_FEATURE_TAG_mset: Result = KBTS__FEATURE_ID_mset; break;
+  case KBTS_FEATURE_TAG_nalt: Result = KBTS__FEATURE_ID_nalt; break;
+  case KBTS_FEATURE_TAG_nlck: Result = KBTS__FEATURE_ID_nlck; break;
+  case KBTS_FEATURE_TAG_nukt: Result = KBTS__FEATURE_ID_nukt; break;
+  case KBTS_FEATURE_TAG_onum: Result = KBTS__FEATURE_ID_onum; break;
+  case KBTS_FEATURE_TAG_opbd: Result = KBTS__FEATURE_ID_opbd; break;
+  case KBTS_FEATURE_TAG_ordn: Result = KBTS__FEATURE_ID_ordn; break;
+  case KBTS_FEATURE_TAG_ornm: Result = KBTS__FEATURE_ID_ornm; break;
+  case KBTS_FEATURE_TAG_palt: Result = KBTS__FEATURE_ID_palt; break;
+  case KBTS_FEATURE_TAG_pcap: Result = KBTS__FEATURE_ID_pcap; break;
+  case KBTS_FEATURE_TAG_pkna: Result = KBTS__FEATURE_ID_pkna; break;
+  case KBTS_FEATURE_TAG_pnum: Result = KBTS__FEATURE_ID_pnum; break;
+  case KBTS_FEATURE_TAG_pres: Result = KBTS__FEATURE_ID_pres; break;
+  case KBTS_FEATURE_TAG_psts: Result = KBTS__FEATURE_ID_psts; break;
+  case KBTS_FEATURE_TAG_pwid: Result = KBTS__FEATURE_ID_pwid; break;
+  case KBTS_FEATURE_TAG_qwid: Result = KBTS__FEATURE_ID_qwid; break;
+  case KBTS_FEATURE_TAG_rand: Result = KBTS__FEATURE_ID_rand; break;
+  case KBTS_FEATURE_TAG_rclt: Result = KBTS__FEATURE_ID_rclt; break;
+  case KBTS_FEATURE_TAG_rkrf: Result = KBTS__FEATURE_ID_rkrf; break;
+  case KBTS_FEATURE_TAG_rlig: Result = KBTS__FEATURE_ID_rlig; break;
+  case KBTS_FEATURE_TAG_rtbd: Result = KBTS__FEATURE_ID_rtbd; break;
+  case KBTS_FEATURE_TAG_rtla: Result = KBTS__FEATURE_ID_rtla; break;
+  case KBTS_FEATURE_TAG_rtlm: Result = KBTS__FEATURE_ID_rtlm; break;
+  case KBTS_FEATURE_TAG_ruby: Result = KBTS__FEATURE_ID_ruby; break;
+  case KBTS_FEATURE_TAG_rvrn: Result = KBTS__FEATURE_ID_rvrn; break;
+  case KBTS_FEATURE_TAG_salt: Result = KBTS__FEATURE_ID_salt; break;
+  case KBTS_FEATURE_TAG_sinf: Result = KBTS__FEATURE_ID_sinf; break;
+  case KBTS_FEATURE_TAG_size: Result = KBTS__FEATURE_ID_size; break;
+  case KBTS_FEATURE_TAG_smcp: Result = KBTS__FEATURE_ID_smcp; break;
+  case KBTS_FEATURE_TAG_smpl: Result = KBTS__FEATURE_ID_smpl; break;
+  case KBTS_FEATURE_TAG_ss01: Result = KBTS__FEATURE_ID_ss01; break;
+  case KBTS_FEATURE_TAG_ss02: Result = KBTS__FEATURE_ID_ss02; break;
+  case KBTS_FEATURE_TAG_ss03: Result = KBTS__FEATURE_ID_ss03; break;
+  case KBTS_FEATURE_TAG_ss04: Result = KBTS__FEATURE_ID_ss04; break;
+  case KBTS_FEATURE_TAG_ss05: Result = KBTS__FEATURE_ID_ss05; break;
+  case KBTS_FEATURE_TAG_ss06: Result = KBTS__FEATURE_ID_ss06; break;
+  case KBTS_FEATURE_TAG_ss07: Result = KBTS__FEATURE_ID_ss07; break;
+  case KBTS_FEATURE_TAG_ss08: Result = KBTS__FEATURE_ID_ss08; break;
+  case KBTS_FEATURE_TAG_ss09: Result = KBTS__FEATURE_ID_ss09; break;
+  case KBTS_FEATURE_TAG_ss10: Result = KBTS__FEATURE_ID_ss10; break;
+  case KBTS_FEATURE_TAG_ss11: Result = KBTS__FEATURE_ID_ss11; break;
+  case KBTS_FEATURE_TAG_ss12: Result = KBTS__FEATURE_ID_ss12; break;
+  case KBTS_FEATURE_TAG_ss13: Result = KBTS__FEATURE_ID_ss13; break;
+  case KBTS_FEATURE_TAG_ss14: Result = KBTS__FEATURE_ID_ss14; break;
+  case KBTS_FEATURE_TAG_ss15: Result = KBTS__FEATURE_ID_ss15; break;
+  case KBTS_FEATURE_TAG_ss16: Result = KBTS__FEATURE_ID_ss16; break;
+  case KBTS_FEATURE_TAG_ss17: Result = KBTS__FEATURE_ID_ss17; break;
+  case KBTS_FEATURE_TAG_ss18: Result = KBTS__FEATURE_ID_ss18; break;
+  case KBTS_FEATURE_TAG_ss19: Result = KBTS__FEATURE_ID_ss19; break;
+  case KBTS_FEATURE_TAG_ss20: Result = KBTS__FEATURE_ID_ss20; break;
+  case KBTS_FEATURE_TAG_ssty: Result = KBTS__FEATURE_ID_ssty; break;
+  case KBTS_FEATURE_TAG_stch: Result = KBTS__FEATURE_ID_stch; break;
+  case KBTS_FEATURE_TAG_subs: Result = KBTS__FEATURE_ID_subs; break;
+  case KBTS_FEATURE_TAG_sups: Result = KBTS__FEATURE_ID_sups; break;
+  case KBTS_FEATURE_TAG_swsh: Result = KBTS__FEATURE_ID_swsh; break;
+  case KBTS_FEATURE_TAG_test: Result = KBTS__FEATURE_ID_test; break;
+  case KBTS_FEATURE_TAG_titl: Result = KBTS__FEATURE_ID_titl; break;
+  case KBTS_FEATURE_TAG_tnam: Result = KBTS__FEATURE_ID_tnam; break;
+  case KBTS_FEATURE_TAG_tnum: Result = KBTS__FEATURE_ID_tnum; break;
+  case KBTS_FEATURE_TAG_trad: Result = KBTS__FEATURE_ID_trad; break;
+  case KBTS_FEATURE_TAG_twid: Result = KBTS__FEATURE_ID_twid; break;
+  case KBTS_FEATURE_TAG_unic: Result = KBTS__FEATURE_ID_unic; break;
+  case KBTS_FEATURE_TAG_valt: Result = KBTS__FEATURE_ID_valt; break;
+  case KBTS_FEATURE_TAG_vapk: Result = KBTS__FEATURE_ID_vapk; break;
+  case KBTS_FEATURE_TAG_vatu: Result = KBTS__FEATURE_ID_vatu; break;
+  case KBTS_FEATURE_TAG_vchw: Result = KBTS__FEATURE_ID_vchw; break;
+  case KBTS_FEATURE_TAG_vert: Result = KBTS__FEATURE_ID_vert; break;
+  case KBTS_FEATURE_TAG_vhal: Result = KBTS__FEATURE_ID_vhal; break;
+  case KBTS_FEATURE_TAG_vkna: Result = KBTS__FEATURE_ID_vkna; break;
+  case KBTS_FEATURE_TAG_vkrn: Result = KBTS__FEATURE_ID_vkrn; break;
+  case KBTS_FEATURE_TAG_vpal: Result = KBTS__FEATURE_ID_vpal; break;
+  case KBTS_FEATURE_TAG_vrt2: Result = KBTS__FEATURE_ID_vrt2; break;
+  case KBTS_FEATURE_TAG_vrtr: Result = KBTS__FEATURE_ID_vrtr; break;
+  case KBTS_FEATURE_TAG_zero: Result = KBTS__FEATURE_ID_zero; break;
   default: break;
   }
   return Result;
@@ -5088,557 +5130,555 @@ static kbts_u8 kbts__ScriptExtensions[447] = {
 };
 
 static kbts_u8 kbts__UnicodeDecomposition_PageIndices[17407] = {
-  0,1,2,3,4,5,6,7,8,2,2,2,2,9,10,11,12,13,2,14,2,2,2,2,15,2,2,16,2,2,2,2,
-  2,2,2,2,17,18,2,19,20,21,2,2,2,22,2,23,2,24,2,25,2,26,2,27,2,2,2,2,28,29,30,2,
-  31,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,32,2,2,2,33,34,
-  2,2,2,2,2,2,2,2,2,2,2,2,35,36,2,2,2,2,2,2,2,2,2,2,37,38,39,40,41,42,43,44,
-  45,46,47,2,48,2,49,50,51,52,53,54,55,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,56,2,57,
-  2,2,2,2,2,2,58,59,2,2,2,60,2,2,2,2,2,2,2,2,2,2,2,2,61,62,2,2,2,2,2,2,
-  63,64,65,66,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,67,68,69,70,71,72,73,74,75,76,2,2,2,2,2,2,2,2,2,2,2,77,2,2,78,79,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,80,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,81,2,82,2,2,2,2,2,2,2,2,83,84,85,2,2,86,2,2,2,87,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,88,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,89,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,90,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,91,92,93,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  94,95,96,97,98,99,100,101,102,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  0,1,1,2,3,4,5,6,7,1,1,1,1,8,9,10,11,12,1,13,1,1,1,1,14,1,1,15,1,1,1,1,
+  1,1,1,1,16,17,1,18,19,20,1,1,1,21,1,22,1,23,1,24,1,25,1,26,1,1,1,1,1,27,28,1,
+  29,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,30,31,
+  1,1,1,1,1,1,1,1,1,1,1,1,32,33,1,1,1,1,1,1,1,1,1,1,34,35,36,37,38,39,40,41,
+  42,1,1,1,43,1,44,45,46,47,48,49,50,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,51,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,52,53,54,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,55,56,57,58,59,60,61,62,63,64,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,65,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,66,1,67,1,1,1,1,1,1,1,1,68,69,70,1,1,71,1,1,1,72,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,73,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,74,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,75,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,76,77,78,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  79,80,81,82,83,84,85,86,87,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
 };
 
-static kbts_u64 kbts__UnicodeDecomposition_Data[6592] = {
+static kbts_u64 kbts__UnicodeDecomposition_Data[5632] = {
   52776558133248ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,343932928ull,335544320ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,780140544ull,0ull,763363328ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,1048576000ull,0ull,1031798784ull,0ull,0ull,
+  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   6442451206ull,6450839814ull,6459228422ull,6467617030ull,6509560070ull,6526337286ull,0ull,6769606926ull,6442451222ull,6450839830ull,6459228438ull,6509560086ull,6442451238ull,6450839846ull,6459228454ull,6509560102ull,0ull,6467617082ull,6442451262ull,6450839870ull,6459228478ull,6467617086ull,6509560126ull,0ull,0ull,6442451286ull,6450839894ull,6459228502ull,6509560150ull,6450839910ull,0ull,0ull,
@@ -5691,16 +5731,12 @@ static kbts_u64 kbts__UnicodeDecomposition_Data[6592] = {
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,29611800422ull,0ull,29653743462ull,29611800434ull,29787961190ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,32707182592ull,32698793984ull,32723959808ull,32715571200ull,0ull,0ull,
   0ull,0ull,0ull,33747385610ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,33747385650ull,0ull,0ull,0ull,0ull,33747385670ull,0ull,0ull,0ull,0ull,33747385690ull,0ull,0ull,0ull,0ull,33747385710ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,33730608386ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,33168571846ull,0ull,33185349062ull,33286012618ull,0ull,33286012622ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,33286012358ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,33747385930ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,33747385970ull,0ull,0ull,
   0ull,0ull,33747385990ull,0ull,0ull,0ull,0ull,33747386010ull,0ull,0ull,0ull,0ull,33747386030ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,33730608706ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,34745630870ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,48553263104ull,48544874496ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,35235358072582ull,35235366461190ull,
   35235374849798ull,0ull,0ull,0ull,35235408404230ull,35235416792838ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
@@ -5727,10 +5763,6 @@ static kbts_u64 kbts__UnicodeDecomposition_Data[6592] = {
   6492786454ull,6476009238ull,6442454830ull,3777ull,6601838342ull,6610226950ull,6996102934ull,6996102958ull,6492786326ull,6476009110ull,6442454678ull,3641ull,6610226822ull,6442451618ull,3605ull,385ull,0ull,0ull,7021297138ull,7021268774ull,7021268794ull,0ull,6996102950ull,7021297626ull,6442454654ull,3633ull,6442454694ull,3645ull,7021268646ull,721ull,0ull,0ull,
   32777ull,32781ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,32833ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,69306679296ull,69298290688ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,69776441344ull,69768052736ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,69910659072ull,69902270464ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,3749ull,0ull,0ull,0ull,301ull,789ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,6912247362ull,6912247370ull,0ull,0ull,0ull,0ull,
@@ -5745,23 +5777,9 @@ static kbts_u64 kbts__UnicodeDecomposition_Data[6592] = {
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,6912248458ull,6912248482ull,6912248486ull,6912248494ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   6912248306ull,6912248310ull,6912248390ull,6912248394ull,0ull,0ull,0ull,0ull,0ull,0ull,6912248522ull,6912248526ull,6912248530ull,6912248534ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,75237425152ull,75229036544ull,75254202368ull,75245813760ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,75514298401ull,75505909797ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,84632666112ull,84624277504ull,84649443328ull,84641054720ull,84666220544ull,84657831936ull,84682997760ull,84674609152ull,84699774976ull,84691386368ull,84716552192ull,84708163584ull,84733329408ull,84724940800ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,85412806656ull,85404418048ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,85689630720ull,85681242112ull,85706407936ull,85698019328ull,85723185152ull,85714796544ull,85739962368ull,85731573760ull,85756739584ull,85748350976ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,89154125824ull,89145737216ull,89170903040ull,89162514432ull,89187680256ull,89179291648ull,89204457472ull,89196068864ull,89221234688ull,89212846080ull,89254789120ull,89246400512ull,89238011904ull,89229623296ull,89271566336ull,89263177728ull,89288343552ull,89279954944ull,89305120768ull,89296732160ull,89321897984ull,89313509376ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,89867157504ull,89858768896ull,89883934720ull,89875546112ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,90169147392ull,90160758784ull,0ull,0ull,
+  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,49185ull,49189ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,6912256886ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,99077849088ull,99069460480ull,99094626304ull,99086237696ull,99111403520ull,99103014912ull,99128180736ull,99119792128ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,99505668096ull,99497279488ull,99522445312ull,99514056704ull,99539222528ull,99530833920ull,99555999744ull,99547611136ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,103154712576ull,103146323968ull,103171489792ull,103163101184ull,103188267008ull,103179878400ull,103205044224ull,103196655616ull,103221821440ull,103213432832ull,0ull,0ull,103255375872ull,103246987264ull,103272153088ull,103263764480ull,103288930304ull,103280541696ull,103305707520ull,103297318912ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,104362721582ull,0ull,104362721590ull,0ull,104362721598ull,0ull,104362721606ull,0ull,104362721614ull,0ull,104362721622ull,0ull,104362721630ull,0ull,104362721638ull,0ull,104362721646ull,0ull,104362721654ull,0ull,
   104362721662ull,0ull,104362721670ull,0ull,0ull,104362721682ull,0ull,104362721690ull,0ull,104362721698ull,0ull,0ull,0ull,0ull,0ull,0ull,104362721726ull,104371110334ull,0ull,104362721738ull,104371110346ull,0ull,104362721750ull,104371110358ull,0ull,104362721762ull,104371110370ull,0ull,104362721774ull,104371110382ull,0ull,0ull,
@@ -5789,12 +5807,6 @@ static kbts_u64 kbts__UnicodeDecomposition_Data[6592] = {
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,12356425638ull,12364814246ull,12356676902ull,12365065510ull,12272539458ull,12280928066ull,12314482498ull,12314482502ull,12314482506ull,12314482510ull,12314482514ull,12314482518ull,12314482522ull,0ull,12314482530ull,12314482534ull,12314482538ull,12314482542ull,12314482546ull,0ull,12314482554ull,0ull,
   12314482562ull,12314482566ull,0ull,12314482574ull,12314482578ull,0ull,12314482586ull,12314482590ull,12314482594ull,12314482598ull,12314482602ull,12289316694ull,12339648326ull,12339648366ull,12339648402ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,546215821312ull,546207432704ull,546232598528ull,546224209920ull,546249375744ull,546240987136ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,547683827712ull,547675439104ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,548120035328ull,0ull,548103258112ull,0ull,0ull,
-  0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,548388470784ull,0ull,548371693568ull,0ull,548413636608ull,
-  548405248000ull,0ull,548438802432ull,548430413824ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,6501439306ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,6501439338ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,
   0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,0ull,585676112486ull,0ull,585676112494ull,0ull,0ull,0ull,
@@ -8527,37 +8539,37 @@ KBTS_INLINE kbts_u16 kbts__GetUnicodeSyllabicInfo(kbts_u32 Codepoint)
 static kbts_u8 kbts__UnicodeFlags_PageIndices[8703] = {
   0,1,2,3,2,4,5,6,2,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,
   30,31,32,33,34,35,36,37,38,33,33,33,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,2,2,2,55,
-  56,57,58,59,33,33,60,33,61,33,33,33,33,33,62,63,33,33,33,64,33,33,65,66,67,68,69,70,71,72,33,73,
-  74,75,76,77,78,33,33,33,79,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,80,79,2,2,2,
+  56,57,58,59,60,61,62,33,63,33,33,33,33,33,64,65,33,33,33,66,67,68,69,70,71,72,73,74,75,76,33,77,
+  78,79,80,81,82,33,33,33,83,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,84,83,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,81,
-  33,33,33,33,33,33,33,33,33,82,33,33,83,84,85,86,87,88,89,90,91,92,93,94,79,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,85,
+  33,33,33,33,33,33,33,33,33,86,33,33,87,88,89,90,91,92,93,94,95,96,97,98,83,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,95,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  79,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,81,33,33,96,97,98,99,33,33,100,101,102,103,104,105,
-  106,107,108,109,2,110,111,112,113,114,115,116,33,33,117,118,119,120,121,122,123,124,125,126,127,128,129,130,131,132,133,134,
-  135,136,137,138,139,140,141,142,143,144,2,145,146,147,148,2,149,150,151,152,153,154,2,155,156,157,158,159,2,160,161,162,
-  33,33,33,33,33,33,33,37,163,33,164,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,165,
-  33,33,33,33,33,33,33,33,166,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,
-  33,33,33,33,33,33,33,107,33,33,33,33,167,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,99,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  83,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,85,33,33,100,101,102,103,33,33,104,105,106,107,108,109,
+  110,111,112,113,2,114,115,116,117,118,119,120,33,33,121,122,123,124,125,126,127,128,129,130,131,132,133,134,135,136,137,138,
+  139,140,141,142,143,144,145,146,147,148,2,149,150,151,152,2,153,154,155,156,157,158,2,159,160,161,162,163,2,164,165,166,
+  33,33,33,33,33,33,33,37,167,33,168,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,169,
+  33,33,33,33,33,33,33,33,170,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,
+  33,33,33,33,33,33,33,111,33,33,33,33,171,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,168,2,2,2,2,2,2,2,2,2,2,2,2,2,33,33,33,33,169,170,171,172,2,2,173,2,2,174,175,176,
-  79,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,177,33,33,33,33,33,33,33,33,33,178,179,2,2,2,2,2,
+  2,2,172,2,2,2,2,2,2,2,2,2,2,2,2,2,33,33,33,33,173,174,175,176,2,2,177,2,2,178,179,180,
+  83,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,181,33,33,33,33,33,33,33,33,33,182,183,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,180,
-  33,33,181,33,33,182,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,183,184,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,33,185,33,33,33,186,187,164,
-  33,188,189,190,191,192,193,2,2,2,2,2,2,194,195,196,33,33,33,33,197,198,2,2,2,2,2,2,2,2,199,2,
-  200,201,202,2,2,203,2,2,2,204,2,205,2,2,2,206,33,207,208,2,2,2,2,2,209,210,211,2,212,213,2,2,
-  214,215,33,216,217,2,33,33,33,33,33,33,33,218,219,220,221,222,33,33,223,224,33,225,2,2,2,2,2,2,2,2,
-  79,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,184,
+  33,33,185,33,33,186,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,187,188,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,33,189,33,33,33,190,191,168,
+  33,192,193,194,195,196,197,2,2,2,2,2,2,198,199,200,33,33,33,33,201,202,2,2,2,2,2,2,2,2,203,2,
+  204,205,206,2,2,207,2,2,2,208,2,209,2,2,2,210,33,211,212,2,2,2,2,2,213,214,215,2,216,217,2,2,
+  218,219,33,220,221,2,33,33,33,33,33,33,33,222,223,224,225,226,33,33,227,228,33,229,2,2,2,2,2,2,2,2,
+  83,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
@@ -8567,15 +8579,15 @@ static kbts_u8 kbts__UnicodeFlags_PageIndices[8703] = {
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,226,79,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,227,2,228,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,229,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,230,83,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,231,2,232,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,233,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,230,2,2,2,2,231,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,33,33,33,33,232,2,2,2,2,2,2,2,2,2,2,2,
-  79,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,233,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,234,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,234,2,2,2,2,235,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,33,33,33,33,236,2,2,2,2,2,2,2,2,2,2,2,
+  83,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,237,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,238,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
@@ -8749,7 +8761,7 @@ static kbts_u8 kbts__UnicodeFlags_PageIndices[8703] = {
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  235,235,236,237,235,235,235,235,235,235,235,235,235,235,235,235,235,235,235,235,235,235,235,235,235,235,235,235,235,235,235,235,
+  239,239,240,241,239,239,239,239,239,239,239,239,239,239,239,239,239,239,239,239,239,239,239,239,239,239,239,239,239,239,239,239,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
@@ -8765,7 +8777,7 @@ static kbts_u8 kbts__UnicodeFlags_PageIndices[8703] = {
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  79,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  83,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
@@ -8780,8 +8792,8 @@ static kbts_u8 kbts__UnicodeFlags_PageIndices[8703] = {
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,238,
-  79,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,242,
+  83,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
@@ -8799,10 +8811,10 @@ static kbts_u8 kbts__UnicodeFlags_PageIndices[8703] = {
   2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
 };
 
-static kbts_u8 kbts__UnicodeFlags_Data[30592] = {
-  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,16,0,0,0,4,8,0,16,0,0,0,0,48,48,48,48,48,48,48,48,48,48,0,0,16,16,16,0,
+static kbts_u8 kbts__UnicodeFlags_Data[31104] = {
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,16,0,0,0,4,8,0,16,0,0,0,0,48,48,48,48,48,48,48,48,48,48,0,0,28,16,28,0,
   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,0,8,16,0,16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,16,8,16,0,
-  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,16,16,16,16,16,0,16,16,16,0,16,2,16,16,16,16,16,16,16,0,0,0,16,16,16,0,16,16,16,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,16,16,16,16,16,0,16,16,16,12,16,2,16,16,16,16,16,16,16,0,0,0,16,16,16,12,16,16,16,0,
   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,16,0,0,0,0,0,0,0,0,
   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
@@ -8912,7 +8924,7 @@ static kbts_u8 kbts__UnicodeFlags_Data[30592] = {
   80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,
   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,16,0,16,
   16,16,0,0,0,0,0,0,0,0,0,0,0,16,16,16,0,0,0,0,0,0,0,0,0,0,0,0,0,16,16,16,0,0,0,0,0,0,0,0,0,0,0,0,0,16,16,16,0,0,0,0,0,0,0,0,0,0,0,0,0,16,16,0,
-  0,0,0,0,0,0,0,0,0,0,0,2,2,2,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,2,2,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,2,2,2,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,2,2,2,2,0,0,0,0,0,0,0,0,0,0,12,12,0,0,0,0,0,
   0,0,0,0,16,4,8,0,0,0,0,0,0,0,0,0,0,0,16,0,0,0,0,0,0,0,0,0,0,0,0,0,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,16,16,0,0,16,16,16,16,16,16,16,16,16,4,8,16,
   16,16,16,16,16,16,16,16,16,16,16,16,16,4,8,0,16,16,16,16,16,16,16,16,16,16,16,16,16,0,0,0,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
   16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,80,80,80,80,80,80,80,80,80,80,80,80,80,16,16,16,16,80,16,16,16,80,80,80,80,80,80,80,80,80,80,80,80,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
@@ -8920,6 +8932,10 @@ static kbts_u8 kbts__UnicodeFlags_Data[30592] = {
   16,16,16,16,16,0,0,0,0,0,16,16,16,16,0,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
   16,16,16,0,0,16,16,16,16,16,16,16,0,0,0,0,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
   16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
+  16,16,16,16,16,16,16,16,28,28,28,28,28,28,16,16,16,16,16,16,16,28,16,16,16,16,16,16,16,16,16,28,28,28,28,16,28,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,28,28,16,16,
+  16,16,16,28,16,28,16,16,16,16,16,16,28,16,16,16,16,16,28,28,28,28,16,16,16,16,16,16,16,16,16,16,16,16,16,16,28,28,28,28,28,28,28,28,16,16,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,
+  28,28,28,28,28,28,28,28,28,28,28,28,16,16,16,28,28,28,28,16,16,16,16,16,28,16,16,16,16,16,16,16,16,16,28,28,16,16,28,16,28,28,16,28,16,16,16,16,28,28,28,28,28,28,28,28,28,16,16,16,16,16,16,16,
+  16,16,16,16,16,16,16,16,16,28,28,28,28,28,16,16,28,28,16,16,16,16,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,16,16,28,28,28,28,28,16,28,28,16,16,28,28,28,28,28,16,
   16,16,16,16,16,16,16,16,4,8,4,8,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,4,8,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
   16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
   16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
@@ -8927,13 +8943,17 @@ static kbts_u8 kbts__UnicodeFlags_Data[30592] = {
   16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
   16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,4,8,4,8,4,8,4,8,4,8,4,8,4,8,16,16,16,16,16,16,16,16,16,16,
   16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
-  16,16,16,16,16,4,8,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,4,8,4,8,4,8,4,8,4,8,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
-  16,16,16,4,8,4,8,4,8,4,8,4,8,4,8,4,8,4,8,4,8,4,8,4,8,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
-  16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,4,8,4,8,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,4,8,16,16,
+  16,16,16,28,28,4,8,16,28,28,16,28,16,28,16,16,16,16,16,16,16,28,28,16,16,16,16,16,28,28,28,16,16,16,28,28,28,28,4,8,4,8,4,8,4,8,4,8,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
+  16,16,16,4,8,4,8,4,8,4,8,4,8,4,8,4,8,4,8,4,8,4,8,4,8,16,16,28,16,16,16,16,28,16,16,28,28,28,16,16,28,28,28,28,28,28,28,28,16,16,16,16,16,16,16,16,28,16,16,16,16,16,16,16,
+  28,28,16,16,28,28,16,16,16,16,16,16,16,16,16,28,28,28,28,16,28,28,16,16,4,8,4,8,16,16,16,16,16,16,16,16,16,16,16,16,28,28,16,16,16,16,16,16,16,16,16,16,16,28,16,16,28,28,16,16,4,8,16,16,
+  16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,28,28,28,28,16,16,16,16,16,28,28,16,16,16,16,16,16,28,28,16,16,
+  16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,28,28,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,28,28,28,28,28,28,28,
+  28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,16,16,16,28,28,28,28,28,28,28,28,16,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,
+  28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,16,16,16,16,16,16,16,28,16,16,16,16,28,28,28,16,16,16,16,16,16,28,28,28,16,16,16,16,16,16,16,16,28,28,28,28,16,16,16,16,16,
   16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
   16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,0,0,16,16,16,16,16,16,16,16,16,16,
   16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,0,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
-  16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
+  16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,28,16,
   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,16,16,0,0,
   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
@@ -8942,7 +8962,7 @@ static kbts_u8 kbts__UnicodeFlags_Data[30592] = {
   16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,0,0,0,0,0,0,0,16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,80,
   16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,0,0,0,0,0,0,0,0,0,16,16,16,16,16,16,16,0,16,16,16,16,16,16,16,0,16,16,16,16,16,16,16,0,16,16,16,16,16,16,16,0,
   16,16,16,16,16,16,16,0,16,16,16,16,16,16,16,0,16,16,16,16,16,16,16,0,16,16,16,16,16,16,16,0,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,
-  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,8,4,8,4,8,4,8,0,0,0,0,0,16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,12,12,12,12,0,0,0,12,12,0,12,12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,12,12,0,0,12,12,4,8,4,8,4,8,4,8,0,0,0,0,0,16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,16,16,0,0,0,4,8,4,8,4,8,4,8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
   16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,0,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
   16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,0,0,0,0,0,0,0,0,0,0,0,0,
@@ -9005,10 +9025,10 @@ static kbts_u8 kbts__UnicodeFlags_Data[30592] = {
   16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,0,0,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
   16,16,16,16,16,16,16,16,0,0,0,0,0,0,0,16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
   82,82,82,82,82,82,82,82,82,82,82,82,82,82,82,82,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,80,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,8,4,8,4,8,0,0,0,16,0,16,16,16,0,0,16,0,0,0,0,0,0,16,16,16,16,16,0,16,16,16,16,16,16,16,16,16,16,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,8,4,8,4,8,0,0,0,16,0,28,28,16,0,0,16,0,0,0,0,0,0,16,16,16,16,16,0,16,16,16,16,16,16,16,16,16,16,
   16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
   16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,0,0,2,
-  0,0,0,0,16,0,0,0,4,8,0,16,0,0,0,0,48,48,48,48,48,48,48,48,48,48,0,0,16,16,16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,0,8,16,0,
+  0,0,0,0,16,0,0,0,4,8,0,16,0,0,0,0,48,48,48,48,48,48,48,48,48,48,0,0,28,16,28,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,0,8,16,0,
   16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,16,8,16,4,8,0,4,8,0,0,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,
   16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,18,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,0,
   0,0,16,16,16,16,16,16,0,0,16,16,16,16,16,16,0,0,16,16,16,16,16,16,0,0,16,16,16,0,0,0,16,16,16,16,16,16,16,0,16,16,16,16,16,16,16,0,2,2,2,2,2,2,2,2,2,0,0,0,16,16,0,0,
@@ -14450,6 +14470,369 @@ KBTS_INLINE kbts_u16 kbts__GetUnicodeScriptExtension(kbts_u32 Codepoint)
   return (Codepoint < 1114110) ? kbts__UnicodeScriptExtension_Data[((kbts_un)kbts__UnicodeScriptExtension_PageIndices[Codepoint/128] * 128) | (Codepoint & 127)] : 0;
 }
 
+static kbts_u8 kbts__UnicodeMirrorCodepoint_PageIndices[8703] = {
+  0,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,4,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  5,6,2,2,7,8,9,2,2,2,2,2,2,2,10,11,2,2,2,12,13,14,2,15,2,2,2,2,16,2,2,2,
+  17,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,18,2,19,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+};
+
+static kbts_u32 kbts__UnicodeMirrorCodepoint_Data[2560] = {
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,41,40,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,62,0,60,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,93,0,91,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,125,0,123,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,187,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,171,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3899,3898,3901,3900,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5788,5787,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,8250,8249,0,0,0,0,0,
+  0,0,0,0,0,8262,8261,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,8318,8317,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,8334,8333,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,8715,8716,8717,8712,8713,8714,0,0,0,0,0,0,0,10741,0,0,0,0,0,0,0,0,0,11262,
+  10659,10651,10656,0,10990,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,8765,8764,0,0,
+  0,0,0,8909,0,8780,0,0,0,0,0,0,8773,0,0,0,0,0,8787,8786,8789,8788,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,8805,8804,8807,8806,8809,8808,8811,8810,0,0,8815,8814,8817,8816,8819,8818,8821,8820,8823,8822,8825,8824,8827,8826,8829,8828,8831,8830,
+  8833,8832,8835,8834,8837,8836,8839,8838,8841,8840,8843,8842,0,0,0,8848,8847,8850,8849,0,0,0,0,0,10680,0,0,0,0,0,0,0,
+  0,0,8867,8866,0,0,10974,0,10980,10979,0,10981,0,0,0,0,8881,8880,8883,8882,8885,8884,8887,8886,10204,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,8906,8905,8908,8907,8771,0,0,8913,8912,0,0,0,0,8919,8918,8921,8920,8923,8922,8925,8924,8927,8926,
+  8929,8928,8931,8930,8933,8932,8935,8934,8937,8936,8939,8938,8941,8940,0,0,8945,8944,8954,8955,8956,0,8957,8958,0,0,8946,8947,8948,8950,8951,0,
+  0,0,0,0,0,0,0,0,8969,8968,8971,8970,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,9002,9001,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,10089,10088,10091,10090,10093,10092,10095,10094,10097,10096,10099,10098,10101,10100,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,10180,10179,10182,10181,0,10185,10184,0,10189,0,10187,0,0,0,0,0,0,0,10198,10197,0,0,0,0,0,8888,10206,10205,0,
+  0,0,10211,10210,10213,10212,10215,10214,10217,10216,10219,10218,10221,10220,10223,10222,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,10628,10627,10630,10629,10632,10631,10634,10633,10636,10635,10640,10639,10638,10637,10642,10641,10644,10643,10646,10645,10648,10647,0,0,8737,0,0,0,0,
+  8738,0,0,8736,10661,10660,0,0,10665,10664,10667,10666,10669,10668,10671,10670,0,0,0,0,0,0,0,0,8856,0,0,0,0,0,0,0,
+  10689,10688,0,0,10693,10692,0,0,0,0,0,0,0,0,0,10704,10703,10706,10705,0,10709,10708,0,0,10713,10712,10715,10714,0,0,0,0,
+  0,0,0,0,0,0,0,0,10729,10728,0,0,0,0,0,0,0,0,0,0,0,8725,0,0,10745,10744,0,0,10749,10748,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,10796,10795,10798,10797,0,0,0,0,0,10805,10804,0,0,0,0,0,0,10813,10812,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,10853,10852,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10874,10873,10876,10875,10878,10877,10880,
+  10879,10882,10881,10884,10883,10886,10885,10888,10887,10890,10889,10892,10891,10894,10893,10896,10895,10898,10897,10900,10899,10902,10901,10904,10903,10906,10905,10908,10907,10910,10909,10912,
+  10911,10914,10913,0,0,0,10919,10918,10921,10920,10923,10922,10925,10924,0,10928,10927,10930,10929,10932,10931,10934,10933,10936,10935,10938,10937,10940,10939,10942,10941,10944,
+  10943,10946,10945,10948,10947,10950,10949,10952,10951,10954,10953,10956,10955,10958,10957,10960,10959,10962,10961,10964,10963,10966,10965,0,0,0,0,0,0,0,8870,0,
+  0,0,0,8873,8872,8875,0,0,0,0,0,0,10989,10988,8740,0,0,0,0,0,0,0,0,11000,10999,11002,11001,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,8735,0,
+  0,0,11779,11778,11781,11780,0,0,0,11786,11785,0,11789,11788,0,0,0,0,0,0,0,0,0,0,0,0,0,0,11805,11804,0,0,
+  11809,11808,11811,11810,11813,11812,11815,11814,11817,11816,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,11862,11861,11864,11863,11866,11865,11868,11867,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,12297,12296,12299,12298,12301,12300,12303,12302,12305,12304,0,0,12309,12308,12311,12310,12313,12312,12315,12314,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,65114,65113,65116,65115,65118,65117,0,
+  0,0,0,0,65125,65124,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,65289,65288,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,65310,0,65308,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,65341,0,65339,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,65373,0,65371,0,65376,
+  65375,0,65379,65378,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+};
+
+KBTS_INLINE kbts_u32 kbts__GetUnicodeMirrorCodepoint(kbts_u32 Codepoint)
+{
+  return (Codepoint < 1114110) ? kbts__UnicodeMirrorCodepoint_Data[((kbts_un)kbts__UnicodeMirrorCodepoint_PageIndices[Codepoint/128] * 128) | (Codepoint & 127)] : 0;
+}
+
 KBTS_INLINE kbts_u32 kbts__GetDecompositionSize(kbts_u64 Decomposition)
 {
   return Decomposition & 3;
@@ -14461,16 +14844,6 @@ KBTS_INLINE kbts_u32 kbts__GetDecompositionCodepoint(kbts_u64 Decomposition, kbt
 
 #define KBTS_UNICODE_DECOMPOSITION_DO_NOT_RECURSE0 (1ull << 44)
 #define KBTS_UNICODE_DECOMPOSITION_DO_NOT_RECURSE1 (1ull << 45)
-
-KBTS_INLINE kbts_u32 kbts__GetMatchingBracket(kbts_u64 Decomposition)
-{
-  return (Decomposition >> 23) & 0x1FFFFF;
-}
-
-KBTS_INLINE kbts_u32 kbts__GetUnicodeMatchingBracket(kbts_u32 Codepoint)
-{
-  kbts_u64 Decomposition = (Codepoint < 1114110) ? kbts__GetUnicodeDecomposition(Codepoint) : 0;  return (Decomposition >> 23) & 0x1FFFFF;
-}
 
 KBTS_INLINE kbts_u8 kbts__GetSyllabicClass(kbts_u16 SyllabicInfo)
 {
@@ -15346,7 +15719,7 @@ static int kbts__ByteSwapArray32(kbts_u32 *Array, kbts_un Count, char *End)
   return Result;
 }
 
-static kbts_u64 kbts__ContainsFeature(kbts__feature_set *Set, kbts_feature_id Id)
+static kbts_u64 kbts__ContainsFeature(kbts__feature_set *Set, kbts__feature_id Id)
 {
   kbts_un WordIndex = Id / 64;
   kbts_un BitIndex = Id % 64;
@@ -15355,7 +15728,7 @@ static kbts_u64 kbts__ContainsFeature(kbts__feature_set *Set, kbts_feature_id Id
   return Result;
 }
 
-static void kbts__AddFeature(kbts__feature_set *Set, kbts_feature_id Id)
+static void kbts__AddFeature(kbts__feature_set *Set, kbts__feature_id Id)
 {
   kbts_un WordIndex = Id / 64;
   kbts_un BitIndex = Id % 64;
@@ -16360,7 +16733,7 @@ typedef struct kbts__unpacked_value_record
   kbts__device *AdvanceYDevice;
 } kbts__unpacked_value_record;
 
-static kbts__unpacked_value_record kbts_UnpackValueRecord(void *Parent, kbts_u16 Format, kbts_u16 *Record)
+static kbts__unpacked_value_record kbts__UnpackValueRecord(void *Parent, kbts_u16 Format, kbts_u16 *Record)
 {
   kbts__unpacked_value_record Result = KBTS__ZERO;
 
@@ -16424,7 +16797,7 @@ static kbts__unpacked_value_record kbts_UnpackValueRecord(void *Parent, kbts_u16
   return Result;
 }
 
-static kbts__unpacked_reverse_chain_substitution kbts_UnpackReverseChainSubstitution(kbts__reverse_chain_substitution *Subst, int ByteSwap)
+static kbts__unpacked_reverse_chain_substitution kbts__UnpackReverseChainSubstitution(kbts__reverse_chain_substitution *Subst, int ByteSwap)
 {
   kbts__unpacked_reverse_chain_substitution Result;
 
@@ -16452,7 +16825,7 @@ static kbts__unpacked_reverse_chain_substitution kbts_UnpackReverseChainSubstitu
   return Result;
 }
 
-static kbts__unpacked_chained_sequence_rule kbts_UnpackChainedSequenceRule(kbts__chained_sequence_rule *Rule, int ByteSwap)
+static kbts__unpacked_chained_sequence_rule kbts__UnpackChainedSequenceRule(kbts__chained_sequence_rule *Rule, int ByteSwap)
 {
   kbts__unpacked_chained_sequence_rule Result;
 
@@ -16487,7 +16860,7 @@ static kbts__unpacked_chained_sequence_rule kbts_UnpackChainedSequenceRule(kbts_
   return Result;
 }
 
-static kbts__unpacked_chained_sequence_context_3 kbts_UnpackChainedSequenceContext3(kbts__chained_sequence_context_3 *Subst, int ByteSwap)
+static kbts__unpacked_chained_sequence_context_3 kbts__UnpackChainedSequenceContext3(kbts__chained_sequence_context_3 *Subst, int ByteSwap)
 {
   kbts__unpacked_chained_sequence_context_3 Result;
 
@@ -16531,7 +16904,7 @@ typedef struct kbts__unpacked_lookup
   kbts_u16 SubtableCount;
 } kbts__unpacked_lookup;
 
-static kbts__unpacked_lookup kbts_UnpackLookup(kbts__gdef *Gdef, kbts__lookup *Lookup)
+static kbts__unpacked_lookup kbts__UnpackLookup(kbts__gdef *Gdef, kbts__lookup *Lookup)
 {
   kbts__unpacked_lookup Result = KBTS__ZERO;
 
@@ -17212,7 +17585,7 @@ static kbts__unpacked_value_record kbts_ByteSwapValueRecord(kbts__byteswap_conte
 
     kbts__ByteSwapArray16Context(Record, U16Count, Context);
 
-    Result = kbts_UnpackValueRecord(Parent, ValueFormat, Record);
+    Result = kbts__UnpackValueRecord(Parent, ValueFormat, Record);
 
     kbts__ByteSwapDevice(Context, Result.PlacementXDevice);
     kbts__ByteSwapDevice(Context, Result.PlacementYDevice);
@@ -17253,7 +17626,7 @@ static void kbts__ByteSwapChainedSequenceRuleSet(kbts__byteswap_context *Context
 
       if(!kbts__AlreadyVisited(Context, Rule))
       {
-        kbts__unpacked_chained_sequence_rule Unpacked = kbts_UnpackChainedSequenceRule(Rule, 1);
+        kbts__unpacked_chained_sequence_rule Unpacked = kbts__UnpackChainedSequenceRule(Rule, 1);
 
         kbts_un U16Count = Unpacked.BacktrackCount + Unpacked.InputCount + Unpacked.LookaheadCount + Unpacked.RecordCount * 2 + 3;
         kbts__ByteSwapArray16Context(&Rule->BacktrackGlyphCount, U16Count, Context);
@@ -17539,28 +17912,28 @@ enum kbts__skip_flags_enum
 #define KBTS__SKIP_FLAGS_GPOS_REGULAR(RequestedFlags) (((RequestedFlags) & KBTS__SKIP_FLAG_ZWJ) | KBTS__SKIP_FLAG_ZWNJ)
 #define KBTS__SKIP_FLAGS_GPOS_SEQUENCE(RequestedFlags) (KBTS__SKIP_FLAG_ZWJ | KBTS__SKIP_FLAG_ZWNJ)
 
-static kbts__skip_flags kbts__SkipFlags(kbts_feature_id FeatureId, kbts_shaper Shaper)
+static kbts__skip_flags kbts__SkipFlags(kbts__feature_id FeatureId, kbts_shaper Shaper)
 {
   kbts__skip_flags Result = 0;
   switch(FeatureId)
   {
-  case KBTS_FEATURE_ID_nukt:
-  case KBTS_FEATURE_ID_akhn:
-  case KBTS_FEATURE_ID_rphf:
-  case KBTS_FEATURE_ID_rkrf:
-  case KBTS_FEATURE_ID_pref:
-  case KBTS_FEATURE_ID_blwf:
-  case KBTS_FEATURE_ID_abvf:
-  case KBTS_FEATURE_ID_half:
-  case KBTS_FEATURE_ID_pstf:
-  case KBTS_FEATURE_ID_vatu:
-  case KBTS_FEATURE_ID_cjct:
-  case KBTS_FEATURE_ID_pres:
-  case KBTS_FEATURE_ID_abvs:
-  case KBTS_FEATURE_ID_blws:
-  case KBTS_FEATURE_ID_psts:
-  case KBTS_FEATURE_ID_haln:
-  case KBTS_FEATURE_ID_cfar:
+  case KBTS__FEATURE_ID_nukt:
+  case KBTS__FEATURE_ID_akhn:
+  case KBTS__FEATURE_ID_rphf:
+  case KBTS__FEATURE_ID_rkrf:
+  case KBTS__FEATURE_ID_pref:
+  case KBTS__FEATURE_ID_blwf:
+  case KBTS__FEATURE_ID_abvf:
+  case KBTS__FEATURE_ID_half:
+  case KBTS__FEATURE_ID_pstf:
+  case KBTS__FEATURE_ID_vatu:
+  case KBTS__FEATURE_ID_cjct:
+  case KBTS__FEATURE_ID_pres:
+  case KBTS__FEATURE_ID_abvs:
+  case KBTS__FEATURE_ID_blws:
+  case KBTS__FEATURE_ID_psts:
+  case KBTS__FEATURE_ID_haln:
+  case KBTS__FEATURE_ID_cfar:
     if(Shaper == KBTS_SHAPER_USE)
     {
       Result = KBTS__SKIP_FLAG_ZWNJ;
@@ -17576,30 +17949,30 @@ static kbts__skip_flags kbts__SkipFlags(kbts_feature_id FeatureId, kbts_shaper S
     }
     break;
 
-  case KBTS_FEATURE_ID_init:
+  case KBTS__FEATURE_ID_init:
     if     (Shaper == KBTS_SHAPER_INDIC)  {Result = 0;}
     else if(Shaper == KBTS_SHAPER_ARABIC) {Result = KBTS__SKIP_FLAG_ZWNJ;}
     else                                  {Result = KBTS__SKIP_FLAG_ZWNJ | KBTS__SKIP_FLAG_ZWJ;}
     break;
 
-  case KBTS_FEATURE_ID_ccmp:
-  case KBTS_FEATURE_ID_locl:
-  case KBTS_FEATURE_ID_isol:
-  case KBTS_FEATURE_ID_fina:
-  case KBTS_FEATURE_ID_fin2:
-  case KBTS_FEATURE_ID_fin3:
-  case KBTS_FEATURE_ID_medi:
-  case KBTS_FEATURE_ID_med2:
-  case KBTS_FEATURE_ID_calt:
-  case KBTS_FEATURE_ID_liga:
-  case KBTS_FEATURE_ID_clig:
-  case KBTS_FEATURE_ID_rlig:
-  case KBTS_FEATURE_ID_mset:
+  case KBTS__FEATURE_ID_ccmp:
+  case KBTS__FEATURE_ID_locl:
+  case KBTS__FEATURE_ID_isol:
+  case KBTS__FEATURE_ID_fina:
+  case KBTS__FEATURE_ID_fin2:
+  case KBTS__FEATURE_ID_fin3:
+  case KBTS__FEATURE_ID_medi:
+  case KBTS__FEATURE_ID_med2:
+  case KBTS__FEATURE_ID_calt:
+  case KBTS__FEATURE_ID_liga:
+  case KBTS__FEATURE_ID_clig:
+  case KBTS__FEATURE_ID_rlig:
+  case KBTS__FEATURE_ID_mset:
     Result = (Shaper == KBTS_SHAPER_ARABIC) ? KBTS__SKIP_FLAG_ZWNJ : KBTS__SKIP_FLAG_ZWNJ | KBTS__SKIP_FLAG_ZWJ;
     break;
 
-  case KBTS_FEATURE_ID_mark:
-  case KBTS_FEATURE_ID_mkmk:
+  case KBTS__FEATURE_ID_mark:
+  case KBTS__FEATURE_ID_mkmk:
     Result = 0;
     break;
 
@@ -17868,7 +18241,7 @@ static void kbts__ByteSwapChainedSequenceContextSubtable(kbts__byteswap_context 
         KBTS__FOR(RuleIndex, 0, Set->Count)
         {
           kbts__chained_sequence_rule *Rule = kbts__GetChainedClassSequenceRule(Set, RuleIndex);
-          kbts__unpacked_chained_sequence_rule Unpacked = kbts_UnpackChainedSequenceRule(Rule, 0);
+          kbts__unpacked_chained_sequence_rule Unpacked = kbts__UnpackChainedSequenceRule(Rule, 0);
 
           KBTS_DUMPF("Backtrack: [");
           KBTS__FOR(BacktrackIndex, 0, Unpacked.BacktrackCount)
@@ -17907,7 +18280,7 @@ static void kbts__ByteSwapChainedSequenceContextSubtable(kbts__byteswap_context 
   else if(Base[0] == 3)
   {
     kbts__chained_sequence_context_3 *Subst = (kbts__chained_sequence_context_3 *)Base;
-    kbts__unpacked_chained_sequence_context_3 Unpacked = kbts_UnpackChainedSequenceContext3(Subst, 1);
+    kbts__unpacked_chained_sequence_context_3 Unpacked = kbts__UnpackChainedSequenceContext3(Subst, 1);
 
     kbts_un U16Count = Unpacked.BacktrackCount + Unpacked.InputCount + Unpacked.LookaheadCount + Unpacked.RecordCount * 2 + 4;
     kbts__ByteSwapArray16Context(&Subst->BacktrackGlyphCount, U16Count, Context);
@@ -18172,7 +18545,7 @@ static void kbts__ByteSwapGsubLookupSubtable(kbts__byteswap_context *Context, kb
     case 8:
     {
       kbts__reverse_chain_substitution *Subst = (kbts__reverse_chain_substitution *)Base;
-      kbts__unpacked_reverse_chain_substitution Unpacked = kbts_UnpackReverseChainSubstitution(Subst, 1);
+      kbts__unpacked_reverse_chain_substitution Unpacked = kbts__UnpackReverseChainSubstitution(Subst, 1);
 
       kbts_un U16Count = Unpacked.BacktrackCount + Unpacked.GlyphCount + Unpacked.LookaheadCount + 3;
       kbts__ByteSwapArray16Context(&Subst->BacktrackGlyphCount, U16Count, Context);
@@ -18684,7 +19057,7 @@ static int kbts__IsValidFeatureIteration(kbts__iterate_features *It)
   return Result;
 }
 
-static int kbts_NextFeature(kbts__iterate_features *It)
+static int kbts__NextFeature(kbts__iterate_features *It)
 {
   int Result = 0;
   It->Feature = 0;
@@ -18716,7 +19089,7 @@ static int kbts_NextFeature(kbts__iterate_features *It)
 
       It->FeatureIndex += 1;
 
-      kbts_u32 FeatureId = kbts_FeatureTagToId(Feature.Tag);
+      kbts_u32 FeatureId = kbts__FeatureTagToId(Feature.Tag);
       if(kbts__ContainsFeature(&It->EnabledFeatures, FeatureId))
       {
         It->Feature = Feature.Feature;
@@ -19281,7 +19654,7 @@ static kbts_glyph *kbts__SetGlyphPreserveLinksAndUserId(kbts_glyph *Dest, kbts_g
   return Dest;
 }
 
-static int kbts_BeginFeatures(kbts__shape_scratchpad *Scratchpad, kbts_shape_config *Config, kbts_shaping_table ShapingTable)
+static int kbts__BeginFeatures(kbts__shape_scratchpad *Scratchpad, kbts_shape_config *Config, kbts_shaping_table ShapingTable)
 {
   int Result = 0;
   kbts_blob_table_id TableId = (ShapingTable == KBTS_SHAPING_TABLE_GSUB) ? KBTS_BLOB_TABLE_ID_GSUB : KBTS_BLOB_TABLE_ID_GPOS;
@@ -19553,7 +19926,7 @@ static kbts__sequence_lookup_result kbts__DoSequenceLookup(kbts_glyph_storage *S
       KBTS__FOR(RuleIndex, 0, Set->Count)
       {
         kbts__chained_sequence_rule *Rule = kbts__GetChainedSequenceRule(Set, RuleIndex);
-        kbts__unpacked_chained_sequence_rule Unpacked = kbts_UnpackChainedSequenceRule(Rule, 0);
+        kbts__unpacked_chained_sequence_rule Unpacked = kbts__UnpackChainedSequenceRule(Rule, 0);
 
         while(kbts__GlyphIsValid(Storage, BacktrackGlyph) && (BacktrackCount < Unpacked.BacktrackCount))
         {
@@ -19638,7 +20011,7 @@ static kbts__sequence_lookup_result kbts__DoSequenceLookup(kbts_glyph_storage *S
       KBTS__FOR(RuleIndex, 0, Set->Count)
       {
         kbts__chained_sequence_rule *Rule = kbts__GetChainedClassSequenceRule(Set, RuleIndex);
-        kbts__unpacked_chained_sequence_rule Unpacked = kbts_UnpackChainedSequenceRule(Rule, 0);
+        kbts__unpacked_chained_sequence_rule Unpacked = kbts__UnpackChainedSequenceRule(Rule, 0);
 
         // @Hardcoded
         KBTS_ASSERT(Unpacked.BacktrackCount <= 64);
@@ -19712,7 +20085,7 @@ static kbts__sequence_lookup_result kbts__DoSequenceLookup(kbts_glyph_storage *S
   case 0x80003:
   {
     kbts__chained_sequence_context_3 *Subst = (kbts__chained_sequence_context_3 *)Base;
-    kbts__unpacked_chained_sequence_context_3 Unpacked = kbts_UnpackChainedSequenceContext3(Subst, 0);
+    kbts__unpacked_chained_sequence_context_3 Unpacked = kbts__UnpackChainedSequenceContext3(Subst, 0);
 
     // Since chained sequence contexts roll the coverage for the first glyph into an array, you'd think that
     // the matching logic for the first glyph would be the same as for any other glyph in that array.
@@ -19880,7 +20253,7 @@ static int kbts__DoSingleAdjustment(kbts__shape_scratchpad *Scratchpad, kbts_sha
         {
           kbts__single_adjustment_1 *Adjust = (kbts__single_adjustment_1 *)Base;
 
-          Unpacked = kbts_UnpackValueRecord(Adjust, Adjust->ValueFormat, KBTS__POINTER_AFTER(kbts_u16, Adjust));
+          Unpacked = kbts__UnpackValueRecord(Adjust, Adjust->ValueFormat, KBTS__POINTER_AFTER(kbts_u16, Adjust));
         }
         else if(Base[0] == 2)
         {
@@ -19890,7 +20263,7 @@ static int kbts__DoSingleAdjustment(kbts__shape_scratchpad *Scratchpad, kbts_sha
           kbts_u16 *Records = KBTS__POINTER_AFTER(kbts_u16, Adjust);
           kbts_u16 *Record = Records + RecordSize * Cover.Index;
 
-          Unpacked = kbts_UnpackValueRecord(Adjust, Adjust->ValueFormat, Record);
+          Unpacked = kbts__UnpackValueRecord(Adjust, Adjust->ValueFormat, Record);
         }
 
         kbts__ApplyValueRecord(CurrentGlyph, &Unpacked);
@@ -19931,9 +20304,9 @@ static int kbts__DoSingleAdjustment(kbts__shape_scratchpad *Scratchpad, kbts_sha
               {
                 kbts_u16 *Records = KBTS__POINTER_AFTER(kbts_u16, PairRecord);
 
-                Unpacked1 = kbts_UnpackValueRecord(Adjust, Adjust->ValueFormat1, Records);
+                Unpacked1 = kbts__UnpackValueRecord(Adjust, Adjust->ValueFormat1, Records);
                 Records += Unpacked1.Size;
-                Unpacked2 = kbts_UnpackValueRecord(Adjust, Adjust->ValueFormat2, Records);
+                Unpacked2 = kbts__UnpackValueRecord(Adjust, Adjust->ValueFormat2, Records);
                 Valid = 1;
               }
             }
@@ -19962,10 +20335,10 @@ static int kbts__DoSingleAdjustment(kbts__shape_scratchpad *Scratchpad, kbts_sha
             {
               kbts_u16 *PairRecord = PairRecords + Class1.Class * PairRecordSize * Adjust->Class2Count + Class2.Class * PairRecordSize;
 
-              Unpacked1 = kbts_UnpackValueRecord(Adjust, Adjust->ValueFormat1, PairRecord);
+              Unpacked1 = kbts__UnpackValueRecord(Adjust, Adjust->ValueFormat1, PairRecord);
               PairRecord += Size1;
 
-              Unpacked2 = kbts_UnpackValueRecord(Adjust, Adjust->ValueFormat2, PairRecord);
+              Unpacked2 = kbts__UnpackValueRecord(Adjust, Adjust->ValueFormat2, PairRecord);
               PairRecord += Size2;
               Valid = 1;
             }
@@ -20077,7 +20450,9 @@ static int kbts__DoSingleAdjustment(kbts__shape_scratchpad *Scratchpad, kbts_sha
               CurrentGlyph->OffsetX = Offset1X;
               CurrentGlyph->Flags |= (KBTS_GLYPH_FLAG_CURSIVE | KBTS_GLYPH_FLAG_USED_IN_GPOS);
 
-              for(kbts_glyph *CursiveGlyph = Prev->Next; CursiveGlyph < CurrentGlyph; ++CursiveGlyph)
+              for(kbts_glyph *CursiveGlyph = Prev->Next;
+                  CursiveGlyph != CurrentGlyph;
+                  CursiveGlyph = CursiveGlyph->Next)
               {
                 CursiveGlyph->Flags |= KBTS_GLYPH_FLAG_NO_BREAK;
               }
@@ -20248,7 +20623,9 @@ static int kbts__DoSingleAdjustment(kbts__shape_scratchpad *Scratchpad, kbts_sha
         kbts_s32 AdvanceSinceBaseY = 0;
         kbts_u32 BaseClasses = (1 | (1 << KBTS__GLYPH_CLASS_BASE) | (1 << KBTS__GLYPH_CLASS_LIGATURE) | (1 << KBTS__GLYPH_CLASS_COMPONENT));
         kbts_glyph *LigatureGlyph = 0;
-        for(kbts_glyph *PrevGlyph = CurrentGlyph->Prev; kbts__GlyphIsValid(Storage, PrevGlyph); PrevGlyph = PrevGlyph->Prev)
+        for(kbts_glyph *PrevGlyph = CurrentGlyph->Prev;
+            kbts__GlyphIsValid(Storage, PrevGlyph);
+            PrevGlyph = PrevGlyph->Prev)
         {
           AdvanceSinceBaseX += PrevGlyph->AdvanceX;
           AdvanceSinceBaseY += PrevGlyph->AdvanceY;
@@ -20303,7 +20680,9 @@ static int kbts__DoSingleAdjustment(kbts__shape_scratchpad *Scratchpad, kbts_sha
               CurrentGlyph->AdvanceX = 0;
               CurrentGlyph->AdvanceY = 0;
 
-              for(kbts_glyph *MiddleGlyph = LigatureGlyph->Next; MiddleGlyph < CurrentGlyph; ++MiddleGlyph)
+              for(kbts_glyph *MiddleGlyph = LigatureGlyph->Next;
+                  MiddleGlyph != CurrentGlyph;
+                  MiddleGlyph = MiddleGlyph->Next)
               {
                 MiddleGlyph->Flags |= KBTS_GLYPH_FLAG_NO_BREAK;
               }
@@ -20325,7 +20704,7 @@ static int kbts__DoSingleAdjustment(kbts__shape_scratchpad *Scratchpad, kbts_sha
           {
             kbts__sequence_lookup_record *Record = &SequenceLookup.Records[RecordIndex];
             kbts__lookup *PackedRecordLookup = kbts__GetLookup(LookupList, Record->LookupListIndex);
-            kbts__unpacked_lookup RecordLookup = kbts_UnpackLookup(kbts__BlobTableDataType(Config->Font->Blob, KBTS_BLOB_TABLE_ID_GDEF, kbts__gdef), PackedRecordLookup);
+            kbts__unpacked_lookup RecordLookup = kbts__UnpackLookup(kbts__BlobTableDataType(Config->Font->Blob, KBTS_BLOB_TABLE_ID_GDEF, kbts__gdef), PackedRecordLookup);
 
             kbts_glyph *NestedCurrentGlyph = CurrentGlyph;
             kbts_un NestedCurrentGlyphIndex = 0;
@@ -20519,7 +20898,7 @@ static kbts__substitution_result_flags kbts__DoSubstitution(kbts__shape_scratchp
   kbts__gsub_frame *Frame = &Frames[FrameCount - 1];
 
   kbts__lookup *PackedLookup = kbts__GetLookup(LookupList, Frame->LookupIndex);
-  kbts__unpacked_lookup Lookup = kbts_UnpackLookup(kbts__BlobTableDataType(Font->Blob, KBTS_BLOB_TABLE_ID_GDEF, kbts__gdef), PackedLookup);
+  kbts__unpacked_lookup Lookup = kbts__UnpackLookup(kbts__BlobTableDataType(Font->Blob, KBTS_BLOB_TABLE_ID_GDEF, kbts__gdef), PackedLookup);
   kbts_u16 BaseLookupType = Lookup.Type;
 
   while(Frame->SubtableIndex < Lookup.SubtableCount)
@@ -20706,7 +21085,7 @@ static kbts__substitution_result_flags kbts__DoSubstitution(kbts__shape_scratchp
                     {
                       kbts__feature_override *Override = (kbts__feature_override *)OverrideHeader;
                       int Value = Override->Value;
-                      kbts_feature_id Id = kbts_FeatureTagToId(Override->Tag);
+                      kbts__feature_id Id = kbts__FeatureTagToId(Override->Tag);
 
                       if(Value &&
                          kbts__ContainsFeature(&Scratchpad->LookupFeatures, Id))
@@ -20912,7 +21291,7 @@ static kbts__substitution_result_flags kbts__DoSubstitution(kbts__shape_scratchp
           case 8:
           {
             kbts__reverse_chain_substitution *Subst = (kbts__reverse_chain_substitution *)Subtable;
-            kbts__unpacked_reverse_chain_substitution Unpacked = kbts_UnpackReverseChainSubstitution(Subst, 0);
+            kbts__unpacked_reverse_chain_substitution Unpacked = kbts__UnpackReverseChainSubstitution(Subst, 0);
 
             // :BoundsChecking
             if(Cover.Index < Unpacked.GlyphCount)
@@ -21192,9 +21571,9 @@ static int kbts__ConfigAllowsFeatures(kbts__shape_scratchpad *Scratchpad, kbts_s
         Header = Header->Next)
     {
       kbts__feature_override *Override = (kbts__feature_override *)Header;
-      kbts_feature_id Id = kbts_FeatureTagToId(Override->Tag);
+      kbts__feature_id Id = kbts__FeatureTagToId(Override->Tag);
 
-      if(Id == KBTS_FEATURE_ID_UNREGISTERED)
+      if(Id == KBTS__FEATURE_ID_UNREGISTERED)
       {
         kbts_feature_tag OverrideTag = Override->Tag;
 
@@ -21521,7 +21900,7 @@ static void kbts__ExecuteOp(kbts__shape_scratchpad *Scratchpad, kbts_shape_confi
         kbts__feature_set UserFeatures = KBTS__ZERO;
         kbts__feature_set *DefaultFeatures = &Config->Features;
 
-        int FlipBrackets = (Scratchpad->RunDirection == KBTS_DIRECTION_RTL);
+        int ShouldFlip = (Scratchpad->RunDirection == KBTS_DIRECTION_RTL);
 
         KBTS__FOR_GLYPH(Storage, Glyph)
         {
@@ -21536,14 +21915,16 @@ static void kbts__ExecuteOp(kbts__shape_scratchpad *Scratchpad, kbts_shape_confi
             }
           }
 
-          // @Cleanup: Maybe put this somewhere else?
-          // Flip brackets when we know we will flip the glyph sequence later on.
-          if(FlipBrackets &&
-             (Glyph->UnicodeFlags & (KBTS_UNICODE_FLAG_OPEN_BRACKET | KBTS_UNICODE_FLAG_CLOSE_BRACKET)))
+          // In RTL, mirror all glyphs when their mirror is covered.
+          if(ShouldFlip &&
+             (Glyph->UnicodeFlags & KBTS_UNICODE_FLAG_MIRRORED))
           {
-            kbts_u32 MatchingBracketCodepoint = kbts__GetMatchingBracket(Glyph->Decomposition);
+            kbts_u32 MatchingBracketCodepoint = kbts__GetUnicodeMirrorCodepoint(Glyph->Codepoint);
             kbts_glyph MatchingBracket = kbts_CodepointToGlyph(Font, (int)MatchingBracketCodepoint, 0, 0);
-            kbts__SetGlyphPreserveLinksAndUserId(Glyph, &MatchingBracket);
+            if(MatchingBracket.Id)
+            {
+              kbts__SetGlyphPreserveLinksAndUserId(Glyph, &MatchingBracket);
+            }
           }
 
           kbts_u32 SingleRecompositionCodepoints[KBTS_MAXIMUM_RECOMPOSITION_PARENTS];
@@ -22130,7 +22511,7 @@ static void kbts__ExecuteOp(kbts__shape_scratchpad *Scratchpad, kbts_shape_confi
       kbts__skip_flags SkipFlags;
       kbts_un LookupIndex;
 
-      if(kbts_BeginFeatures(Scratchpad, Config, KBTS_SHAPING_TABLE_GSUB))
+      if(kbts__BeginFeatures(Scratchpad, Config, KBTS_SHAPING_TABLE_GSUB))
       {
         while(kbts__NextLookupIndex(Scratchpad, Config, &LookupIndex, &SkipFlags, &GlyphFilter, &Scratchpad->LookupFeatures))
         {
@@ -22332,7 +22713,7 @@ static void kbts__ExecuteOp(kbts__shape_scratchpad *Scratchpad, kbts_shape_confi
       KBTS_INSTRUMENT_BLOCK_BEGIN(GPOS_FEATURES);
       kbts__gsub_gpos *Gpos = kbts__BlobTableDataType(Font->Blob, KBTS_BLOB_TABLE_ID_GPOS, kbts__gsub_gpos);
       
-      if(kbts_BeginFeatures(Scratchpad, Config, KBTS_SHAPING_TABLE_GPOS))
+      if(kbts__BeginFeatures(Scratchpad, Config, KBTS_SHAPING_TABLE_GPOS))
       {
         kbts_lookup_list *LookupList = kbts__GetLookupList(Gpos);
         kbts_un LookupIndex;
@@ -22342,7 +22723,7 @@ static void kbts__ExecuteOp(kbts__shape_scratchpad *Scratchpad, kbts_shape_confi
         while(kbts__NextLookupIndex(Scratchpad, Config, &LookupIndex, &SkipFlags, &GlyphFilter, &LookupFeatures))
         {
           kbts__lookup *PackedLookup = kbts__GetLookup(LookupList, LookupIndex);
-          kbts__unpacked_lookup Lookup = kbts_UnpackLookup(kbts__BlobTableDataType(Font->Blob, KBTS_BLOB_TABLE_ID_GDEF, kbts__gdef), PackedLookup);
+          kbts__unpacked_lookup Lookup = kbts__UnpackLookup(kbts__BlobTableDataType(Font->Blob, KBTS_BLOB_TABLE_ID_GDEF, kbts__gdef), PackedLookup);
 
           kbts_glyph *Glyph = Storage->GlyphSentinel.Next;
           while(kbts__GlyphIsValid(Storage, Glyph))
@@ -24245,7 +24626,7 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
     kbts__feature_set SyllableFeatureSet = {{KBTS__FEATURE_FLAG0(rphf) | KBTS__FEATURE_FLAG0(blwf) | KBTS__FEATURE_FLAG0(half) | KBTS__FEATURE_FLAG0(pstf) | KBTS__FEATURE_FLAG0(pref),
                                             0, KBTS__FEATURE_FLAG2(rclt) | KBTS__FEATURE_FLAG2(locl), KBTS__FEATURE_FLAG3(vatu)}};
     kbts__iterate_features IterateFeatures = kbts__IterateFeatures(Result, KBTS_SHAPING_TABLE_GSUB, SyllableFeatureSet);
-    while(kbts_NextFeature(&IterateFeatures))
+    while(kbts__NextFeature(&IterateFeatures))
     {
       switch(IterateFeatures.CurrentFeatureTag)
       {
@@ -24324,7 +24705,7 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
               kbts_un FeatureIndex = FeatureIndices[FeatureIndexIndex];
               kbts__feature_pointer Feature = kbts__GetFeature(FeatureList, FeatureIndex);
 
-              kbts_u32 FeatureId = kbts_FeatureTagToId(Feature.Tag);
+              kbts_u32 FeatureId = kbts__FeatureTagToId(Feature.Tag);
 
               if(Feature.Feature->LookupIndexCount &&
                  ((UserFeaturesAllowed &&
@@ -24346,7 +24727,7 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
               kbts_un FeatureIndex = FeatureIndices[FeatureIndexIndex];
               kbts__feature_pointer Feature = kbts__GetFeature(FeatureList, FeatureIndex);
 
-              kbts_u32 FeatureId = kbts_FeatureTagToId(Feature.Tag);
+              kbts_u32 FeatureId = kbts__FeatureTagToId(Feature.Tag);
               // We add all features indiscriminately for ops that might incorporate user features.
               if(Feature.Feature->LookupIndexCount &&
                  // We add "all" features to user feature stages, except for features that are a default part of the shaper.
@@ -24387,7 +24768,7 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
                 // Harfbuzz more often.
                 if((Result->Shaper != KBTS_SHAPER_MYANMAR) && (FeatureId >= 1) && (FeatureId <= 32))
                 {
-                  // These must properly map KBTS_FEATURE_ID to kbts_glyph_flags!
+                  // These must properly map KBTS__FEATURE_ID to kbts_glyph_flags!
                   BakedFeature.GlyphFilter = (1 << (FeatureId - 1)) & KBTS__GLYPH_FEATURE_MASK;
                 }
 
@@ -24764,12 +25145,6 @@ KBTS_EXPORT kbts_font *kbts_ShapePushFontFromMemory(kbts_shape_context *Context,
   return Result;
 }
 
-KBTS_EXPORT int kbts_SizeOfGlyphStorage(void)
-{
-  int Result = sizeof(kbts_glyph_storage);
-  return Result;
-}
-
 static void kbts__EnsureGlyphStorageInitialized(kbts_glyph_storage *Storage)
 {
   if(!Storage->GlyphSentinel.Next)
@@ -24779,18 +25154,17 @@ static void kbts__EnsureGlyphStorageInitialized(kbts_glyph_storage *Storage)
   }
 }
 
-KBTS_EXPORT kbts_glyph_storage *kbts_PlaceGlyphStorage(kbts_allocator_function *Allocator, void *AllocatorData, void *Memory)
+KBTS_EXPORT int kbts_InitializeGlyphStorage(kbts_glyph_storage *Storage, kbts_allocator_function *Allocator, void *AllocatorData)
 {
-  kbts_glyph_storage *Result = (kbts_glyph_storage *)Memory;
+  int Result = 0;
 
-  if(Memory)
+  if(Storage)
   {
-    KBTS_MEMSET(Result, 0, sizeof(*Result));
+    Result = 1;
+    KBTS_MEMSET(Storage, 0, sizeof(*Storage));
 
-    Result->Arena.Allocator = Allocator;
-    Result->Arena.AllocatorData = AllocatorData;
-
-    kbts__EnsureGlyphStorageInitialized(Result);
+    Storage->Arena.Allocator = Allocator;
+    Storage->Arena.AllocatorData = AllocatorData;
   }
 
   return Result;
@@ -24800,8 +25174,11 @@ KBTS_EXPORT int kbts_InitializeGlyphStorageFixedMemory(kbts_glyph_storage *Stora
 {
   int Result = 0;
 
-  if(MemorySize > 0)
+  if(Storage &&
+     (MemorySize > 0))
   {
+    KBTS_MEMSET(Storage, 0, sizeof(*Storage));
+
     Result = kbts__InitializeFixedMemoryArena(&Storage->Arena, Memory, (kbts_un)MemorySize);
   }
 
@@ -24883,7 +25260,7 @@ KBTS_EXPORT kbts_glyph *kbts_PushGlyph(kbts_glyph_storage *Storage, kbts_font *F
 static int kbts__FeatureOverrideIsExtra(kbts_u32 Tag, int Value)
 {
   int Result = 0;
-  kbts_feature_id Id = kbts_FeatureTagToId(Tag);
+  kbts__feature_id Id = kbts__FeatureTagToId(Tag);
 
   if(!Id || (kbts_u32)(Value > 1))
   {
@@ -24937,7 +25314,7 @@ KBTS_EXPORT kbts_glyph_config *kbts_PlaceGlyphConfig(kbts_feature_override *Over
       KBTS__FOR(OverrideIndex, 0, (kbts_un)OverrideCount)
       {
         kbts_feature_override *Override = &Overrides[OverrideIndex];
-        kbts_feature_id Id = kbts_FeatureTagToId(Override->Tag);
+        kbts__feature_id Id = kbts__FeatureTagToId(Override->Tag);
 
         if(kbts__FeatureOverrideIsExtra(Override->Tag, Override->Value))
         {
@@ -25307,7 +25684,7 @@ KBTS_EXPORT void kbts_ShapeCodepointWithUserId(kbts_shape_context *Context, int 
           OverrideHeader = OverrideHeader->Prev)
       {
         kbts__feature_override *Override = (kbts__feature_override *)OverrideHeader;
-        kbts_feature_id Id = kbts_FeatureTagToId(Override->Tag);
+        kbts__feature_id Id = kbts__FeatureTagToId(Override->Tag);
 
         if(!Id || !kbts__ContainsFeature(&Features, Id))
         {
@@ -25501,7 +25878,7 @@ KBTS_EXPORT void kbts_ShapePushFeature(kbts_shape_context *Context, kbts_u32 Tag
     Override->Tag = Tag;
     Override->Value = Value;
 
-    kbts_feature_id Id = kbts_FeatureTagToId(Tag);
+    kbts__feature_id Id = kbts__FeatureTagToId(Tag);
     kbts__AddFeature(&Context->UserFeaturesEnabled, Id);
 
     Context->NeedNewGlyphConfig = 1;
@@ -26771,7 +27148,7 @@ KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_
 
         if(kbts__ByteSwapLookup(&ByteSwapContext, PackedLookup))
         {
-          kbts__unpacked_lookup Lookup = kbts_UnpackLookup(Gdef, PackedLookup);
+          kbts__unpacked_lookup Lookup = kbts__UnpackLookup(Gdef, PackedLookup);
           KBTS_DUMPF("  Flags %u\n", Lookup.Flags);
 
           KBTS__FOR(SubstitutionIndex, 0, Lookup.SubtableCount)
@@ -26802,7 +27179,7 @@ KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_
 
         if(kbts__ByteSwapLookup(&ByteSwapContext, PackedLookup))
         {
-          kbts__unpacked_lookup Lookup = kbts_UnpackLookup(Gdef, PackedLookup);
+          kbts__unpacked_lookup Lookup = kbts__UnpackLookup(Gdef, PackedLookup);
 
           KBTS_DUMPF("  Flags %x\n", Lookup.Flags);
 
@@ -26865,7 +27242,7 @@ KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_
             KBTS__FOR(LookupIndex, 0, LookupList->Count)
             {
               kbts__lookup *PackedLookup = kbts__GetLookup(LookupList, LookupIndex);
-              kbts__unpacked_lookup Lookup = kbts_UnpackLookup(Gdef, PackedLookup);
+              kbts__unpacked_lookup Lookup = kbts__UnpackLookup(Gdef, PackedLookup);
 
               LookupSubtableIndexOffsets[RunningLookupIndex] = (kbts_u32)RunningSubtableIndex;
 
@@ -27017,7 +27394,7 @@ KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_
                       KBTS__FOR(RuleIndex, 0, Set->Count)
                       {
                         kbts__chained_sequence_rule *Rule = kbts__GetChainedClassSequenceRule(Set, RuleIndex);
-                        kbts__unpacked_chained_sequence_rule Unpacked = kbts_UnpackChainedSequenceRule(Rule, 0);
+                        kbts__unpacked_chained_sequence_rule Unpacked = kbts__UnpackChainedSequenceRule(Rule, 0);
 
                         SubtableInfo.MinimumBacktrackPlusOne = KBTS__MIN(SubtableInfo.MinimumBacktrackPlusOne - 1, Unpacked.BacktrackCount) + 1;
                         SubtableInfo.MinimumFollowupPlusOne = KBTS__MIN(SubtableInfo.MinimumFollowupPlusOne - 1, Unpacked.InputCount - 1 + Unpacked.LookaheadCount) + 1;
@@ -27080,7 +27457,7 @@ KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_
                         KBTS__FOR(RuleIndex, 0, Set->Count)
                         {
                           kbts__chained_sequence_rule *Rule = kbts__GetChainedSequenceRule(Set, RuleIndex);
-                          kbts__unpacked_chained_sequence_rule Unpacked = kbts_UnpackChainedSequenceRule(Rule, 0);
+                          kbts__unpacked_chained_sequence_rule Unpacked = kbts__UnpackChainedSequenceRule(Rule, 0);
 
                           SubtableInfo.MinimumBacktrackPlusOne = KBTS__MIN(SubtableInfo.MinimumBacktrackPlusOne - 1, Unpacked.BacktrackCount) + 1;
                           SubtableInfo.MinimumFollowupPlusOne = KBTS__MIN(SubtableInfo.MinimumFollowupPlusOne - 1, Unpacked.InputCount - 1 + Unpacked.LookaheadCount) + 1;
@@ -27123,7 +27500,7 @@ KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_
                   case 3:
                   {
                     kbts__chained_sequence_context_3 *Subst = (kbts__chained_sequence_context_3 *)Base;
-                    kbts__unpacked_chained_sequence_context_3 Unpacked = kbts_UnpackChainedSequenceContext3(Subst, 0);
+                    kbts__unpacked_chained_sequence_context_3 Unpacked = kbts__UnpackChainedSequenceContext3(Subst, 0);
 
                     Coverage = KBTS__POINTER_OFFSET(kbts__coverage, Subst, Unpacked.InputCoverageOffsets[0]);
 
@@ -27154,7 +27531,7 @@ KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_
                 else if(!InGpos && (LookupType == 8))
                 {
                   kbts__reverse_chain_substitution *Subst = (kbts__reverse_chain_substitution *)Base;
-                  kbts__unpacked_reverse_chain_substitution Unpacked = kbts_UnpackReverseChainSubstitution(Subst, 0);
+                  kbts__unpacked_reverse_chain_substitution Unpacked = kbts__UnpackReverseChainSubstitution(Subst, 0);
                   SubtableInfo.MinimumBacktrackPlusOne = KBTS__MIN(SubtableInfo.MinimumBacktrackPlusOne - 1, Unpacked.BacktrackCount) + 1;
                   SubtableInfo.MinimumFollowupPlusOne = KBTS__MIN(SubtableInfo.MinimumFollowupPlusOne - 1, Unpacked.LookaheadCount) + 1;
 
@@ -27693,7 +28070,7 @@ static void kbts__BreakAddCodepoint(kbts_break_state *State, kbts_u32 Codepoint,
 
   kbts_unicode_bidirectional_class BidirectionalClass = kbts__GetUnicodeBidirectionalClass(Codepoint);
   kbts_u8 UnicodeFlags = kbts__GetUnicodeFlags(Codepoint);
-  kbts_u32 MatchingBracket = kbts__GetUnicodeMatchingBracket(Codepoint);
+  kbts_u32 MatchingBracket = kbts__GetUnicodeMirrorCodepoint(Codepoint);
   kbts_u8 GraphemeBreakClass = kbts__GetUnicodeGraphemeBreakClass(Codepoint);
   kbts_u8 LineBreakClass = kbts__GetUnicodeLineBreakClass(Codepoint);
   kbts_u8 WordBreakClass = kbts__GetUnicodeWordBreakClass(Codepoint);
@@ -27733,7 +28110,7 @@ static void kbts__BreakAddCodepoint(kbts_break_state *State, kbts_u32 Codepoint,
   }
 
   // Bracket pairing overrides default directions/scripts.
-  if(UnicodeFlags & KBTS_UNICODE_FLAG_OPEN_BRACKET)
+  if((UnicodeFlags & KBTS_UNICODE_FLAG_MIRRORED) == KBTS_UNICODE_FLAG_OPEN_BRACKET)
   {
     if(State->BracketCount < KBTS__ARRAY_LENGTH(State->Brackets))
     {
@@ -27756,7 +28133,7 @@ static void kbts__BreakAddCodepoint(kbts_break_state *State, kbts_u32 Codepoint,
       State->Flags |= KBTS_BREAK_STATE_FLAG_LAST_WAS_BRACKET;
     }
   }
-  else if(UnicodeFlags & KBTS_UNICODE_FLAG_CLOSE_BRACKET)
+  else if((UnicodeFlags & KBTS_UNICODE_FLAG_MIRRORED) == KBTS_UNICODE_FLAG_CLOSE_BRACKET)
   {
     if(State->BracketCount)
     {
@@ -28790,7 +29167,7 @@ static void kbts__BreakAddCodepoint(kbts_break_state *State, kbts_u32 Codepoint,
     State->BidirectionalClass2 = Bidirectional1;
     State->BidirectionalClass1 = BidirectionalClass;
     State->Bidirectional2PositionOffset = State->Bidirectional1PositionOffset - (kbts_s16)PositionIncrement;
-    State->Bidirectional1PositionOffset = -(kbts_s16)PositionIncrement;
+    State->Bidirectional1PositionOffset = (kbts_s16)-(int)PositionIncrement;
   }
   State->LastDirection = (kbts_u8)LastDirection;
 
@@ -29190,7 +29567,7 @@ KBTS_EXPORT kbts_encode_utf8 kbts_EncodeUtf8(int Codepoint)
     return Result;
 }
 
-KBTS_EXPORT int kbts_ShaperIsComplex(kbts_shaper Shaper)
+static int kbts__ShaperIsComplex(kbts_shaper Shaper)
 {
   int Result = Shaper != KBTS_SHAPER_DEFAULT; // @Incomplete?
 
@@ -29199,8 +29576,13 @@ KBTS_EXPORT int kbts_ShaperIsComplex(kbts_shaper Shaper)
 
 KBTS_EXPORT int kbts_ScriptIsComplex(kbts_script Script)
 {
+  if(Script >= KBTS_SCRIPT_COUNT)
+  {
+    Script = KBTS_SCRIPT_DONT_KNOW;
+  }
+
   kbts__script_properties *Properties = &kbts__ScriptProperties[Script];
-  int Result = kbts_ShaperIsComplex(Properties->Shaper);
+  int Result = kbts__ShaperIsComplex(Properties->Shaper);
   return Result;
 }
 
