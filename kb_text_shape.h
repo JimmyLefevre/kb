@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.01 - text segmentation and shaping
+/*  kb_text_shape - v2.02 - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1245,6 +1245,7 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     2.02  - Improve globbing of cursive attachments.
      2.01  - Add kbts_InitializeGlyphStorage and kbts_ScriptDirection.
              Rename some private functions for better namespacing.
              Delete some deprecated functions.
@@ -20200,6 +20201,25 @@ static void kbts__SetLookupOnePastLastGlyph(kbts__shape_scratchpad *Scratchpad, 
   }
 }
 
+typedef kbts_u32 kbts__cursive_flags;
+enum kbts__cursive_flags_enum
+{
+  KBTS__CURSIVE_FLAG_NONE,
+  KBTS__CURSIVE_FLAG_START = (1 << 0),
+  KBTS__CURSIVE_FLAG_END = (1 << 1),
+};
+
+KBTS_INLINE kbts__cursive_flags kbts__GetCursiveFlags(kbts_glyph *Glyph)
+{
+  kbts__cursive_flags Result = (kbts__cursive_flags)Glyph->MarkOrdering;
+  return Result;
+}
+
+KBTS_INLINE void kbts__SetCursiveFlags(kbts_glyph *Glyph, kbts__cursive_flags CursiveFlags)
+{
+  Glyph->MarkOrdering = (kbts_u8)CursiveFlags;
+}
+
 static int kbts__DoSingleAdjustment(kbts__shape_scratchpad *Scratchpad, kbts_shape_config *Config, kbts_glyph_storage *Storage,
                                    kbts_lookup_list *LookupList, kbts_un LookupIndex, kbts_un SubtableIndex, kbts__unpacked_lookup *Lookup, kbts_u16 *Base,
                                    kbts_glyph *CurrentGlyph, kbts_un StartIndex, kbts__skip_flags RequestedSkipFlags)
@@ -20446,15 +20466,18 @@ static int kbts__DoSingleAdjustment(kbts__shape_scratchpad *Scratchpad, kbts_sha
               Prev->AdvanceX = Advance0X;
               Prev->OffsetX = Offset0X;
               Prev->Flags |= (KBTS_GLYPH_FLAG_CURSIVE | KBTS_GLYPH_FLAG_USED_IN_GPOS | KBTS_GLYPH_FLAG_NO_BREAK);
+              kbts__SetCursiveFlags(Prev, KBTS__CURSIVE_FLAG_START);
               CurrentGlyph->AdvanceX = Advance1X;
               CurrentGlyph->OffsetX = Offset1X;
-              CurrentGlyph->Flags |= (KBTS_GLYPH_FLAG_CURSIVE | KBTS_GLYPH_FLAG_USED_IN_GPOS);
+              CurrentGlyph->Flags |= KBTS_GLYPH_FLAG_CURSIVE | KBTS_GLYPH_FLAG_USED_IN_GPOS;
+              kbts__SetCursiveFlags(CurrentGlyph, KBTS__CURSIVE_FLAG_END);
 
               for(kbts_glyph *CursiveGlyph = Prev->Next;
                   CursiveGlyph != CurrentGlyph;
                   CursiveGlyph = CursiveGlyph->Next)
               {
                 CursiveGlyph->Flags |= KBTS_GLYPH_FLAG_NO_BREAK;
+                kbts__SetCursiveFlags(CursiveGlyph, 0);
               }
 
               // The second part is aligning the newly-formed cursive cluster to the "baseline". It is trickier than you'd expect.
@@ -20474,6 +20497,7 @@ static int kbts__DoSingleAdjustment(kbts__shape_scratchpad *Scratchpad, kbts_sha
               kbts_s32 CursiveDy = 0;
               kbts_glyph *CursiveGlyph = CurrentGlyph;
               int Backward = 0;
+              kbts_u32 AdjustNearbyGlyphs = (CurrentGlyph->Flags & KBTS_GLYPH_FLAG_CURSIVE);
 
               if(!(Lookup->Flags & KBTS__LOOKUP_FLAG_RIGHT_TO_LEFT))
               {
@@ -20486,20 +20510,37 @@ static int kbts__DoSingleAdjustment(kbts__shape_scratchpad *Scratchpad, kbts_sha
                 CursiveDy = NewOffset0Y - Offset0Y;
                 Backward = 1;
                 CursiveGlyph = Prev;
+                AdjustNearbyGlyphs = 1;
               }
 
-              while(kbts__GlyphIsValid(Storage, CursiveGlyph))
-              {
-                if(CursiveGlyph->Flags & KBTS_GLYPH_FLAG_CURSIVE)
-                {
-                  CursiveGlyph->OffsetY += CursiveDy;
-                }
-                else if(CursiveGlyph->AdvanceX | CursiveGlyph->AdvanceY) // Ignore marks.
-                {
-                  break;
-                }
+              CursiveGlyph->OffsetY += CursiveDy;
 
+              if(AdjustNearbyGlyphs)
+              {
+                kbts__SetCursiveFlags(CursiveGlyph, 0);
                 CursiveGlyph = Backward ? CursiveGlyph->Prev : CursiveGlyph->Next;
+
+                kbts__cursive_flags StopFlag = Backward ? KBTS__CURSIVE_FLAG_END : KBTS__CURSIVE_FLAG_START;
+
+                while(kbts__GlyphIsValid(Storage, CursiveGlyph))
+                {
+                  kbts__cursive_flags CursiveFlags = kbts__GetCursiveFlags(CursiveGlyph);
+
+                  if(CursiveFlags & StopFlag)
+                  {
+                    break;
+                  }
+                  else if(CursiveGlyph->Flags & KBTS_GLYPH_FLAG_CURSIVE)
+                  {
+                    CursiveGlyph->OffsetY += CursiveDy;
+                  }
+                  else if(!(CursiveGlyph->Classes.Class & KBTS__GLYPH_CLASS_MARK)) // Ignore marks.
+                  {
+                    break;
+                  }
+
+                  CursiveGlyph = Backward ? CursiveGlyph->Prev : CursiveGlyph->Next;
+                }
               }
 
               Result = 1;
@@ -22652,6 +22693,8 @@ static void kbts__ExecuteOp(kbts__shape_scratchpad *Scratchpad, kbts_shape_confi
 
       KBTS__FOR_GLYPH(Storage, Glyph)
       {
+        kbts__SetCursiveFlags(Glyph, 0);
+
         kbts__long_mtx Metric = DefaultMetric;
         if(LongMetrics)
         {
