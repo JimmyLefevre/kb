@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.02 - text segmentation and shaping
+/*  kb_text_shape - v2.03 - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1245,6 +1245,7 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     2.03  - Fix loading blobs directly, fix a parsing edge case in GPOS format 2 subtables.
      2.02  - Improve globbing of cursive attachments.
      2.01  - Add kbts_InitializeGlyphStorage and kbts_ScriptDirection.
              Rename some private functions for better namespacing.
@@ -15698,6 +15699,7 @@ static int kbts__ByteSwapArray16(kbts_u16 *Array, kbts_un Count, char *End)
     kbts__ByteSwapArray16Unchecked(Array, Count);
     Result = 1;
   }
+
   return Result;
 }
 
@@ -18640,9 +18642,9 @@ static void kbts__ByteSwapGposLookupSubtable(kbts__byteswap_context *Context, kb
               PairRecord->SecondGlyph = kbts__ByteSwap16(PairRecord->SecondGlyph);
               kbts_u16 *Record = KBTS__POINTER_AFTER(kbts_u16, PairRecord);
 
-              kbts__unpacked_value_record Unpacked1 = kbts_ByteSwapValueRecord(Context, Record, Adjust->ValueFormat1, Record);
+              kbts__unpacked_value_record Unpacked1 = kbts_ByteSwapValueRecord(Context, Set, Adjust->ValueFormat1, Record);
               Record += Unpacked1.Size;
-              kbts_ByteSwapValueRecord(Context, Record, Adjust->ValueFormat2, Record);
+              kbts_ByteSwapValueRecord(Context, Set, Adjust->ValueFormat2, Record);
             }
           }
         }
@@ -26399,6 +26401,68 @@ KBTS_EXPORT int kbts_FontCount(void *Data, int Size)
   return Result;
 }
 
+static kbts__cmap_subtable_pointer kbts__SelectCmapSubtable(kbts_blob_header *Header, kbts_blob_table *CmapTable, kbts__cmap_14 **Cmap14, kbts_u16 *ResultFormat)
+{
+  kbts__cmap_subtable_pointer Result = KBTS__ZERO;
+
+  if(CmapTable->Length >= sizeof(kbts__cmap))
+  {
+    char *TableEnd = KBTS__POINTER_OFFSET(char, Header, CmapTable->OffsetFromStartOfFile + CmapTable->Length);
+    kbts__cmap *Cmap = KBTS__POINTER_OFFSET(kbts__cmap, Header, CmapTable->OffsetFromStartOfFile);
+
+    kbts_u16 PreferredFormat = 1;
+    KBTS__FOR(It, 0, Cmap->TableCount)
+    {
+      kbts__cmap_subtable_pointer Subtable = kbts__GetCmapSubtable(Cmap, It);
+      if((char *)(Subtable.Subtable + 1) <= TableEnd)
+      {
+        kbts_u16 Format = *Subtable.Subtable;
+
+        // This is kind of iffy, but the statelessness is useful for selecting
+        // the cmap from an already-prepared blob without having to deal with
+        // the byteswap context.
+        if((Format > 0xFF) && 
+           ((Format >> 8) <= 14))
+        {
+          Format = kbts__ByteSwap16(Format);
+          *Subtable.Subtable = Format;
+        }
+
+        if(Format == 14)
+        {
+          if((char *)(Subtable.Subtable + sizeof(kbts__cmap_14)) <= TableEnd)
+          {
+            if(Cmap14)
+            {
+              *Cmap14 = (kbts__cmap_14 *)Subtable.Subtable;
+            }
+          }
+        }
+        else if(!Result.Subtable)
+        {
+          Result = Subtable;
+        }
+        else if(Format < KBTS__ARRAY_LENGTH(kbts__CmapFormatPrecedence))
+        {
+          kbts_u16 Precedence = kbts__CmapFormatPrecedence[Format];
+          kbts_u16 PreferredPrecedence = kbts__CmapFormatPrecedence[PreferredFormat];
+
+          if((Precedence > PreferredPrecedence) || ((Precedence == PreferredPrecedence) && (Subtable.PlatformId == 3)))
+          {
+            Result = Subtable;
+            if(ResultFormat)
+            {
+              *ResultFormat = Format;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return Result;
+}
+
 KBTS_EXPORT kbts_load_font_error kbts_LoadFont(kbts_font *Font, kbts_load_font_state *State, void *FontData, int FontDataSize, int FontIndex, int *ScratchSize_, int *OutputSize_)
 {
   kbts_load_font_error Result = 0;
@@ -26568,6 +26632,8 @@ KBTS_EXPORT kbts_load_font_error kbts_LoadFont(kbts_font *Font, kbts_load_font_s
       // @Incomplete: Bounds check or something.
 
       Font->Blob = Header;
+      kbts__cmap_subtable_pointer PreferredSubtable = kbts__SelectCmapSubtable(Header, &Header->Tables[KBTS_BLOB_TABLE_ID_CMAP], &Font->Cmap14, 0);
+      Font->Cmap = PreferredSubtable.Subtable;
     }
   }
 
@@ -26767,43 +26833,11 @@ KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_
               Record->SubtableOffset = kbts__ByteSwap32(Record->SubtableOffset);
             }
 
-            kbts__cmap_subtable_pointer PreferredSubtable = KBTS__ZERO;
             kbts_u16 PreferredFormat = 1;
-            KBTS__FOR(It, 0, Cmap->TableCount)
-            {
-              kbts__cmap_subtable_pointer Subtable = kbts__GetCmapSubtable(Cmap, It);
-              if((char *)(Subtable.Subtable + 1) <= TableEnd)
-              {
-                kbts_u16 Format = kbts__ByteSwap16(*Subtable.Subtable);
 
-                if(Format == 14)
-                {
-                  if((char *)(Subtable.Subtable + sizeof(kbts__cmap_14)) <= TableEnd)
-                  {
-                    Font->Cmap14 = (kbts__cmap_14 *)Subtable.Subtable;
-                  }
-                }
-                else if(!PreferredSubtable.Subtable)
-                {
-                  PreferredSubtable = Subtable;
-                }
-                else if(Format < KBTS__ARRAY_LENGTH(kbts__CmapFormatPrecedence))
-                {
-                  kbts_u16 Precedence = kbts__CmapFormatPrecedence[Format];
-                  kbts_u16 PreferredPrecedence = kbts__CmapFormatPrecedence[PreferredFormat];
-
-                  if((Precedence > PreferredPrecedence) || ((Precedence == PreferredPrecedence) && (Subtable.PlatformId == 3)))
-                  {
-                    PreferredSubtable = Subtable;
-                    PreferredFormat = Format;
-                  }
-                }
-              }
-            }
-
+            kbts__cmap_subtable_pointer PreferredSubtable = kbts__SelectCmapSubtable(Header, CmapTable, &Font->Cmap14, &PreferredFormat);
             if(PreferredSubtable.Subtable)
             {
-              *PreferredSubtable.Subtable = kbts__ByteSwap16(*PreferredSubtable.Subtable);
               switch(*PreferredSubtable.Subtable)
               {
               case 0:
