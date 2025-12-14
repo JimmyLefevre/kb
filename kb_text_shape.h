@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.04 - text segmentation and shaping
+/*  kb_text_shape - v2.05 - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1245,6 +1245,7 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     2.05  - Fix custom allocator initialization for kbts_shape_context.PermanentArena.
      2.04  - Fix Indic syllable logic for small/single-character syllables.
              Fix wrong indirection in pointer code in Indic syllable logic.
      2.03  - Fix loading blobs directly, fix a parsing edge case in GPOS format 2 subtables.
@@ -25020,6 +25021,9 @@ KBTS_EXPORT kbts_shape_context *kbts_PlaceShapeContext(kbts_allocator_function *
     }
 
     KBTS_MEMSET(Result, 0, sizeof(*Result));
+
+    Result->PermanentArena.Allocator = Allocator;
+    Result->PermanentArena.AllocatorData = AllocatorData;
 
     Result->FontArena.Allocator = Allocator;
     Result->FontArena.AllocatorData = AllocatorData;
