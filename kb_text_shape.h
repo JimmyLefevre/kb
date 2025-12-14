@@ -25034,6 +25034,9 @@ KBTS_EXPORT kbts_shape_context *kbts_PlaceShapeContext(kbts_allocator_function *
     Result->ScratchArena.Allocator = Allocator;
     Result->ScratchArena.AllocatorData = AllocatorData;
 
+    Result->GlyphStorage.Arena.Allocator = Allocator;
+    Result->GlyphStorage.Arena.AllocatorData = AllocatorData;
+
     KBTS__DLLIST_SENTINEL_INIT(&Result->FeatureOverrideSentinel);
     KBTS__DLLIST_SENTINEL_INIT(&Result->FreeFeatureOverrideSentinel);
   }
@@ -25075,6 +25078,7 @@ KBTS_EXPORT void kbts_DestroyShapeContext(kbts_shape_context *Context)
 {
   if(Context)
   {
+    kbts__FreeArena(&Context->PermanentArena);
     kbts__FreeArena(&Context->ConfigArena);
     kbts__FreeArena(&Context->ScratchArena);
     kbts__FreeArena(&Context->FontArena);
