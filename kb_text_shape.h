@@ -15599,12 +15599,7 @@ typedef struct kbts_shape_scratchpad
   kbts_direction RunDirection;
 
   kbts_u32 SequentialLookupIndexIndex;
-  kbts_u32 FeatureIndexIndex;
   kbts_u32 FeatureStagesRead;
-  kbts_u16 BakedLookupSubtablesRead[KBTS_MAX_SIMULTANEOUS_FEATURES];
-
-  kbts_u32 UnregisteredFeatureCount;
-  kbts_feature_tag UnregisteredFeatureTags[KBTS_MAX_SIMULTANEOUS_FEATURES];
 
   kbts_shape_error Error;
 } kbts_shape_scratchpad;
@@ -26733,7 +26728,18 @@ static void kbts__ShapeDirect(kbts_shape_scratchpad *Scratchpad, kbts_glyph_stor
 
   if(kbts__GlyphIsValid(Storage, Storage->GlyphSentinel.Next))
   {
+    Scratchpad->Ip = 0;
+    Scratchpad->FeatureStagesRead = 0;
+    Scratchpad->OpKind = 0;
     Scratchpad->RunDirection = RunDirection;
+
+    { // @Cleanup @Speed
+      kbts_un SequentialLookupCount = kbts__SequentialLookupCount(Scratchpad->Config);
+      KBTS__FOR(LookupIndex, 0, SequentialLookupCount)
+      {
+        kbts__FreeGlyphBucket(Scratchpad, LookupIndex);
+      }
+    }
 
     KBTS_INSTRUMENT_BLOCK_BEGIN(ReadOpLoop0);
 
