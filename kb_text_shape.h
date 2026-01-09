@@ -27719,7 +27719,7 @@ KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_
       kbts_blob_table InTable = State->Tables[TableId];
       kbts_blob_table *OutTable = &Header->Tables[TableId];
 
-      char *TableBase = kbts__PointerPush(&Bump, InTable.Length, 4);
+      char *TableBase = (char *)kbts__PointerPush(&Bump, InTable.Length, 4);
       OutTable->OffsetFromStartOfFile = KBTS__POINTER_DIFF32(TableBase, Header);
       OutTable->Length = InTable.Length;
 
