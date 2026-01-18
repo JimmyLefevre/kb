@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.09 - text segmentation and shaping
+/*  kb_text_shape - v2.10 - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -676,6 +676,7 @@
               classic font selection, e.g. "I need a bold font". OpenType fonts may feature
               finer-grained metrics, and we currently do not expose/support those.
             - kbts_font_info2_1 also includes metrics and bounding box information.
+            - kbts_font_info2_2 also includes capital height.
 
             :kbts_font_style_flags
             :font_style_flags
@@ -1288,6 +1289,8 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     2.10  - Properly zero extended font_info2 types in GetFontInfo2.
+             Properly reset the glyph config cache in ShapeBegin.
      2.09  - Fix use-after-free when a shape_scratchpad was freed after its respective shape_config.
              Extended the GetFontInfo API to include metrics and bounding box information.
                New types: kbts_font_info2, kbts_font_info2_1.
@@ -3449,6 +3452,29 @@ typedef struct kbts_font_info2_1
   kbts_s16 Descent;
   kbts_s16 LineGap;
 } kbts_font_info2_1;
+
+typedef struct kbts_font_info2_2
+{
+  kbts_font_info2 Base;
+
+  // _1
+  kbts_u16 UnitsPerEm;
+
+  kbts_s16 XMin;
+  kbts_s16 YMin;
+  kbts_s16 XMax;
+  kbts_s16 YMax;
+
+  kbts_s16 Ascent;
+  kbts_s16 Descent;
+  kbts_s16 LineGap;
+
+  // _2
+
+  // For now, this is just OS2.sCapHeight.
+  // If/when this is zero, we might consider trying to communicate a useful height instead of simply passing the zero along.
+  kbts_s16 CapitalHeight;
+} kbts_font_info2_2;
 
 typedef struct kbts_feature_override
 {
@@ -26282,8 +26308,11 @@ KBTS_EXPORT void kbts_ShapeBegin(kbts_shape_context *Context, kbts_direction Par
     kbts_ClearActiveGlyphs(&Context->GlyphStorage);
 
     Context->BreakStartIndex = 0;
+
+    // Scratch features persist across frames. Don't reset ScratchFeatureOverrideCount.
     Context->CurrentFeatureOverrides = 0;
     Context->CurrentFeatureOverrideCount = 0;
+    Context->ExistingGlyphConfigCount = 0;
     Context->NeedNewGlyphConfig = 1;
 
     Context->ParagraphDirection = ParagraphDirection;
@@ -28641,7 +28670,7 @@ KBTS_EXPORT void kbts_GetFontInfo2(kbts_font *Font, kbts_font_info2 *Info)
   if(Info && Info->Size)
   {
     kbts_un InfoSize = Info->Size;
-    KBTS_MEMSET(Info, 0, sizeof(*Info));
+    KBTS_MEMSET(Info, 0, InfoSize);
     Info->Size = (kbts_u32)InfoSize;
 
     kbts_blob_header *Blob = Font->Blob;
@@ -28656,6 +28685,16 @@ KBTS_EXPORT void kbts_GetFontInfo2(kbts_font *Font, kbts_font_info2 *Info)
 
       switch(InfoSize)
       {
+      case sizeof(kbts_font_info2_2):
+      {
+        kbts_font_info2_2 *Info2_2 = (kbts_font_info2_2 *)Info;
+
+        if(Os2)
+        {
+          Info2_2->CapitalHeight = Os2->CapHeight;
+        }
+      } // Fallthrough
+
       case sizeof(kbts_font_info2_1):
       {
         kbts_font_info2_1 *Info2_1 = (kbts_font_info2_1 *)Info;
