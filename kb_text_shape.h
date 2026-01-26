@@ -22639,7 +22639,6 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
                   ParentGlyph.Config = LastBase->Config;
 
                   kbts_glyph *Next = Glyph->Next;
-                  //KBTS__DLLIST_REMOVE(Glyph);
                   kbts__FreeGlyph(Scratchpad, Config, Storage, Glyph);
                   Glyph = Next;
 
@@ -27119,7 +27118,7 @@ static kbts_shape_config *kbts__FindOrCreateShapeConfig(kbts_shape_context *Cont
   
   if(!Result)
   {
-    Result = kbts_CreateShapeConfig(Font, Script, Language, kbts__ArenaAllocator, &&Context->ConfigArena);
+    Result = kbts_CreateShapeConfig(Font, Script, Language, kbts__ArenaAllocator, &Context->ConfigArena);
 
     if(Context->ExistingShapeConfigCount < KBTS__ARRAY_LENGTH(Context->ExistingShapeConfigs))
     {
