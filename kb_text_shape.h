@@ -22639,7 +22639,8 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
                   ParentGlyph.Config = LastBase->Config;
 
                   kbts_glyph *Next = Glyph->Next;
-                  KBTS__DLLIST_REMOVE(Glyph);
+                  //KBTS__DLLIST_REMOVE(Glyph);
+                  kbts__FreeGlyph(Scratchpad, Config, Storage, Glyph);
                   Glyph = Next;
 
                   Recomposed = 1;
@@ -26325,7 +26326,6 @@ KBTS_EXPORT void kbts_ShapeBegin(kbts_shape_context *Context, kbts_direction Par
     Context->RunFont = 0;
     Context->RunScript = 0;
     Context->RunDirection = 0;
-    Context->ExistingShapeConfigCount = 0;
 
     kbts_BreakBegin(&Context->BreakState, ParagraphDirection, KBTS_JAPANESE_LINE_BREAK_STYLE_NORMAL, 0);
   }
@@ -27119,7 +27119,7 @@ static kbts_shape_config *kbts__FindOrCreateShapeConfig(kbts_shape_context *Cont
   
   if(!Result)
   {
-    Result = kbts_CreateShapeConfig(Font, Script, Language, kbts__ArenaAllocator, &Context->ScratchArena);
+    Result = kbts_CreateShapeConfig(Font, Script, Language, kbts__ArenaAllocator, &&Context->ConfigArena);
 
     if(Context->ExistingShapeConfigCount < KBTS__ARRAY_LENGTH(Context->ExistingShapeConfigs))
     {
