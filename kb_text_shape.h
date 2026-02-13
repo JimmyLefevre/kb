@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.11 - text segmentation and shaping
+/*  kb_text_shape - v2.12 - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1289,6 +1289,7 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     2.12  - Support fonts that use traditionally-GPOS features in GSUB.
      2.11  - Reduce the size of Unicode lookup tables from ~577KiB to ~423KiB.
              Fix a memory leak when recomposing glyphs in the shaper.
              Remember shape and glyph configs in the shape context.
@@ -4431,10 +4432,10 @@ static kbts__op_kind kbts__Ops_Default[] = {
 };
 static kbts__feature_stage kbts__FeatureStages_Default[] = {
   {1, {{0ull, 0ull, 0ull, 0ull | KBTS__FEATURE_FLAG3(rvrn)}}},
-  {12, {{0ull | KBTS__FEATURE_FLAG0(frac) | KBTS__FEATURE_FLAG0(numr) | KBTS__FEATURE_FLAG0(dnom) | KBTS__FEATURE_FLAG0(ccmp) | KBTS__FEATURE_FLAG0(clig) | KBTS__FEATURE_FLAG0(calt), 0ull, 0ull | KBTS__FEATURE_FLAG2(ltra) | KBTS__FEATURE_FLAG2(ltrm) | KBTS__FEATURE_FLAG2(locl) | KBTS__FEATURE_FLAG2(rlig) | KBTS__FEATURE_FLAG2(liga) | KBTS__FEATURE_FLAG2(rclt), 0ull}}},
+  {19, {{0ull | KBTS__FEATURE_FLAG0(frac) | KBTS__FEATURE_FLAG0(numr) | KBTS__FEATURE_FLAG0(dnom) | KBTS__FEATURE_FLAG0(ccmp) | KBTS__FEATURE_FLAG0(clig) | KBTS__FEATURE_FLAG0(calt) | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm) | KBTS__FEATURE_FLAG0(curs), 0ull, 0ull | KBTS__FEATURE_FLAG2(ltra) | KBTS__FEATURE_FLAG2(ltrm) | KBTS__FEATURE_FLAG2(locl) | KBTS__FEATURE_FLAG2(rlig) | KBTS__FEATURE_FLAG2(liga) | KBTS__FEATURE_FLAG2(rclt) | KBTS__FEATURE_FLAG2(mark) | KBTS__FEATURE_FLAG2(mkmk) | KBTS__FEATURE_FLAG2(dist) | KBTS__FEATURE_FLAG2(kern), 0ull}}},
   {7, {{0ull | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm) | KBTS__FEATURE_FLAG0(curs), 0ull, 0ull | KBTS__FEATURE_FLAG2(mark) | KBTS__FEATURE_FLAG2(mkmk) | KBTS__FEATURE_FLAG2(dist) | KBTS__FEATURE_FLAG2(kern), 0ull}}},
 };
-static kbts__op_list kbts__OpList_Default = {20, KBTS__ARRAY_LENGTH(kbts__FeatureStages_Default), kbts__FeatureStages_Default, KBTS__ARRAY_LENGTH(kbts__Ops_Default), kbts__Ops_Default};
+static kbts__op_list kbts__OpList_Default = {27, KBTS__ARRAY_LENGTH(kbts__FeatureStages_Default), kbts__FeatureStages_Default, KBTS__ARRAY_LENGTH(kbts__Ops_Default), kbts__Ops_Default};
 static kbts__op_kind kbts__Ops_Hangul[] = {
   KBTS__OP_KIND_NORMALIZE,
   KBTS__OP_KIND_NORMALIZE_HANGUL,
@@ -4447,10 +4448,10 @@ static kbts__op_kind kbts__Ops_Hangul[] = {
 };
 static kbts__feature_stage kbts__FeatureStages_Hangul[] = {
   {1, {{0ull, 0ull, 0ull, 0ull | KBTS__FEATURE_FLAG3(rvrn)}}},
-  {14, {{0ull | KBTS__FEATURE_FLAG0(frac) | KBTS__FEATURE_FLAG0(numr) | KBTS__FEATURE_FLAG0(dnom) | KBTS__FEATURE_FLAG0(ljmo) | KBTS__FEATURE_FLAG0(vjmo) | KBTS__FEATURE_FLAG0(tjmo) | KBTS__FEATURE_FLAG0(ccmp) | KBTS__FEATURE_FLAG0(clig), 0ull, 0ull | KBTS__FEATURE_FLAG2(ltra) | KBTS__FEATURE_FLAG2(ltrm) | KBTS__FEATURE_FLAG2(rlig) | KBTS__FEATURE_FLAG2(liga) | KBTS__FEATURE_FLAG2(locl) | KBTS__FEATURE_FLAG2(rclt), 0ull}}},
+  {21, {{0ull | KBTS__FEATURE_FLAG0(frac) | KBTS__FEATURE_FLAG0(numr) | KBTS__FEATURE_FLAG0(dnom) | KBTS__FEATURE_FLAG0(ljmo) | KBTS__FEATURE_FLAG0(vjmo) | KBTS__FEATURE_FLAG0(tjmo) | KBTS__FEATURE_FLAG0(ccmp) | KBTS__FEATURE_FLAG0(clig) | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm) | KBTS__FEATURE_FLAG0(curs), 0ull, 0ull | KBTS__FEATURE_FLAG2(ltra) | KBTS__FEATURE_FLAG2(ltrm) | KBTS__FEATURE_FLAG2(rlig) | KBTS__FEATURE_FLAG2(liga) | KBTS__FEATURE_FLAG2(locl) | KBTS__FEATURE_FLAG2(rclt) | KBTS__FEATURE_FLAG2(mkmk) | KBTS__FEATURE_FLAG2(mark) | KBTS__FEATURE_FLAG2(dist) | KBTS__FEATURE_FLAG2(kern), 0ull}}},
   {7, {{0ull | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm) | KBTS__FEATURE_FLAG0(curs), 0ull, 0ull | KBTS__FEATURE_FLAG2(mkmk) | KBTS__FEATURE_FLAG2(mark) | KBTS__FEATURE_FLAG2(dist) | KBTS__FEATURE_FLAG2(kern), 0ull}}},
 };
-static kbts__op_list kbts__OpList_Hangul = {22, KBTS__ARRAY_LENGTH(kbts__FeatureStages_Hangul), kbts__FeatureStages_Hangul, KBTS__ARRAY_LENGTH(kbts__Ops_Hangul), kbts__Ops_Hangul};
+static kbts__op_list kbts__OpList_Hangul = {29, KBTS__ARRAY_LENGTH(kbts__FeatureStages_Hangul), kbts__FeatureStages_Hangul, KBTS__ARRAY_LENGTH(kbts__Ops_Hangul), kbts__Ops_Hangul};
 static kbts__op_kind kbts__Ops_ArabicRclt[] = {
   KBTS__OP_KIND_NORMALIZE,
   KBTS__OP_KIND_FLAG_JOINING_LETTERS,
@@ -4486,10 +4487,10 @@ static kbts__feature_stage kbts__FeatureStages_ArabicRclt[] = {
   {1, {{0ull | KBTS__FEATURE_FLAG0(med2), 0ull, 0ull, 0ull}}},
   {1, {{0ull | KBTS__FEATURE_FLAG0(init), 0ull, 0ull, 0ull}}},
   {1, {{0ull, 0ull, 0ull | KBTS__FEATURE_FLAG2(rlig), 0ull}}},
-  {5, {{0ull | KBTS__FEATURE_FLAG0(calt) | KBTS__FEATURE_FLAG0(clig), 0ull, 0ull | KBTS__FEATURE_FLAG2(liga) | KBTS__FEATURE_FLAG2(mset) | KBTS__FEATURE_FLAG2(rclt), 0ull}}},
+  {12, {{0ull | KBTS__FEATURE_FLAG0(calt) | KBTS__FEATURE_FLAG0(clig) | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm) | KBTS__FEATURE_FLAG0(curs), 0ull, 0ull | KBTS__FEATURE_FLAG2(liga) | KBTS__FEATURE_FLAG2(mset) | KBTS__FEATURE_FLAG2(rclt) | KBTS__FEATURE_FLAG2(mark) | KBTS__FEATURE_FLAG2(mkmk) | KBTS__FEATURE_FLAG2(dist) | KBTS__FEATURE_FLAG2(kern), 0ull}}},
   {7, {{0ull | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm) | KBTS__FEATURE_FLAG0(curs), 0ull, 0ull | KBTS__FEATURE_FLAG2(mark) | KBTS__FEATURE_FLAG2(mkmk) | KBTS__FEATURE_FLAG2(dist) | KBTS__FEATURE_FLAG2(kern), 0ull}}},
 };
-static kbts__op_list kbts__OpList_ArabicRclt = {29, KBTS__ARRAY_LENGTH(kbts__FeatureStages_ArabicRclt), kbts__FeatureStages_ArabicRclt, KBTS__ARRAY_LENGTH(kbts__Ops_ArabicRclt), kbts__Ops_ArabicRclt};
+static kbts__op_list kbts__OpList_ArabicRclt = {36, KBTS__ARRAY_LENGTH(kbts__FeatureStages_ArabicRclt), kbts__FeatureStages_ArabicRclt, KBTS__ARRAY_LENGTH(kbts__Ops_ArabicRclt), kbts__Ops_ArabicRclt};
 static kbts__op_kind kbts__Ops_ArabicNoRclt[] = {
   KBTS__OP_KIND_NORMALIZE,
   KBTS__OP_KIND_FLAG_JOINING_LETTERS,
@@ -4527,10 +4528,10 @@ static kbts__feature_stage kbts__FeatureStages_ArabicNoRclt[] = {
   {1, {{0ull | KBTS__FEATURE_FLAG0(init), 0ull, 0ull, 0ull}}},
   {1, {{0ull, 0ull, 0ull | KBTS__FEATURE_FLAG2(rlig), 0ull}}},
   {1, {{0ull | KBTS__FEATURE_FLAG0(calt), 0ull, 0ull, 0ull}}},
-  {3, {{0ull | KBTS__FEATURE_FLAG0(clig), 0ull, 0ull | KBTS__FEATURE_FLAG2(liga) | KBTS__FEATURE_FLAG2(mset), 0ull}}},
+  {10, {{0ull | KBTS__FEATURE_FLAG0(clig) | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm) | KBTS__FEATURE_FLAG0(curs), 0ull, 0ull | KBTS__FEATURE_FLAG2(liga) | KBTS__FEATURE_FLAG2(mset) | KBTS__FEATURE_FLAG2(mark) | KBTS__FEATURE_FLAG2(mkmk) | KBTS__FEATURE_FLAG2(dist) | KBTS__FEATURE_FLAG2(kern), 0ull}}},
   {7, {{0ull | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm) | KBTS__FEATURE_FLAG0(curs), 0ull, 0ull | KBTS__FEATURE_FLAG2(mark) | KBTS__FEATURE_FLAG2(mkmk) | KBTS__FEATURE_FLAG2(dist) | KBTS__FEATURE_FLAG2(kern), 0ull}}},
 };
-static kbts__op_list kbts__OpList_ArabicNoRclt = {28, KBTS__ARRAY_LENGTH(kbts__FeatureStages_ArabicNoRclt), kbts__FeatureStages_ArabicNoRclt, KBTS__ARRAY_LENGTH(kbts__Ops_ArabicNoRclt), kbts__Ops_ArabicNoRclt};
+static kbts__op_list kbts__OpList_ArabicNoRclt = {35, KBTS__ARRAY_LENGTH(kbts__FeatureStages_ArabicNoRclt), kbts__FeatureStages_ArabicNoRclt, KBTS__ARRAY_LENGTH(kbts__Ops_ArabicNoRclt), kbts__Ops_ArabicNoRclt};
 static kbts__op_kind kbts__Ops_Indic[] = {
   KBTS__OP_KIND_PRE_NORMALIZE_DOTTED_CIRCLES,
   KBTS__OP_KIND_NORMALIZE,
@@ -4572,10 +4573,10 @@ static kbts__feature_stage kbts__FeatureStages_Indic[] = {
   {1, {{0ull, 0ull, 0ull, 0ull | KBTS__FEATURE_FLAG3(vatu)}}},
   {1, {{0ull | KBTS__FEATURE_FLAG0(cjct), 0ull, 0ull, 0ull}}},
   {6, {{0ull | KBTS__FEATURE_FLAG0(abvs) | KBTS__FEATURE_FLAG0(blws) | KBTS__FEATURE_FLAG0(init), 0ull, 0ull | KBTS__FEATURE_FLAG2(haln) | KBTS__FEATURE_FLAG2(pres) | KBTS__FEATURE_FLAG2(psts), 0ull}}},
-  {5, {{0ull | KBTS__FEATURE_FLAG0(calt) | KBTS__FEATURE_FLAG0(clig), 0ull, 0ull | KBTS__FEATURE_FLAG2(locl) | KBTS__FEATURE_FLAG2(rlig) | KBTS__FEATURE_FLAG2(rclt), 0ull}}},
+  {12, {{0ull | KBTS__FEATURE_FLAG0(calt) | KBTS__FEATURE_FLAG0(clig) | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm) | KBTS__FEATURE_FLAG0(curs), 0ull, 0ull | KBTS__FEATURE_FLAG2(locl) | KBTS__FEATURE_FLAG2(rlig) | KBTS__FEATURE_FLAG2(rclt) | KBTS__FEATURE_FLAG2(mark) | KBTS__FEATURE_FLAG2(mkmk) | KBTS__FEATURE_FLAG2(dist) | KBTS__FEATURE_FLAG2(kern), 0ull}}},
   {7, {{0ull | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm) | KBTS__FEATURE_FLAG0(curs), 0ull, 0ull | KBTS__FEATURE_FLAG2(mark) | KBTS__FEATURE_FLAG2(mkmk) | KBTS__FEATURE_FLAG2(dist) | KBTS__FEATURE_FLAG2(kern), 0ull}}},
 };
-static kbts__op_list kbts__OpList_Indic = {35, KBTS__ARRAY_LENGTH(kbts__FeatureStages_Indic), kbts__FeatureStages_Indic, KBTS__ARRAY_LENGTH(kbts__Ops_Indic), kbts__Ops_Indic};
+static kbts__op_list kbts__OpList_Indic = {42, KBTS__ARRAY_LENGTH(kbts__FeatureStages_Indic), kbts__FeatureStages_Indic, KBTS__ARRAY_LENGTH(kbts__Ops_Indic), kbts__Ops_Indic};
 static kbts__op_kind kbts__Ops_Khmer[] = {
   KBTS__OP_KIND_PRE_NORMALIZE_DOTTED_CIRCLES,
   KBTS__OP_KIND_NORMALIZE,
@@ -4595,10 +4596,10 @@ static kbts__feature_stage kbts__FeatureStages_Khmer[] = {
   {1, {{0ull, 0ull, 0ull, 0ull | KBTS__FEATURE_FLAG3(rvrn)}}},
   {5, {{0ull | KBTS__FEATURE_FLAG0(frac) | KBTS__FEATURE_FLAG0(numr) | KBTS__FEATURE_FLAG0(dnom), 0ull, 0ull | KBTS__FEATURE_FLAG2(ltra) | KBTS__FEATURE_FLAG2(ltrm), 0ull}}},
   {7, {{0ull | KBTS__FEATURE_FLAG0(ccmp) | KBTS__FEATURE_FLAG0(pref) | KBTS__FEATURE_FLAG0(blwf) | KBTS__FEATURE_FLAG0(abvf) | KBTS__FEATURE_FLAG0(pstf) | KBTS__FEATURE_FLAG0(cfar), 0ull, 0ull | KBTS__FEATURE_FLAG2(locl), 0ull}}},
-  {8, {{0ull | KBTS__FEATURE_FLAG0(abvs) | KBTS__FEATURE_FLAG0(blws) | KBTS__FEATURE_FLAG0(calt) | KBTS__FEATURE_FLAG0(clig), 0ull, 0ull | KBTS__FEATURE_FLAG2(pres) | KBTS__FEATURE_FLAG2(psts) | KBTS__FEATURE_FLAG2(rclt) | KBTS__FEATURE_FLAG2(rlig), 0ull}}},
+  {15, {{0ull | KBTS__FEATURE_FLAG0(abvs) | KBTS__FEATURE_FLAG0(blws) | KBTS__FEATURE_FLAG0(calt) | KBTS__FEATURE_FLAG0(clig) | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm) | KBTS__FEATURE_FLAG0(curs), 0ull, 0ull | KBTS__FEATURE_FLAG2(pres) | KBTS__FEATURE_FLAG2(psts) | KBTS__FEATURE_FLAG2(rclt) | KBTS__FEATURE_FLAG2(rlig) | KBTS__FEATURE_FLAG2(dist) | KBTS__FEATURE_FLAG2(kern) | KBTS__FEATURE_FLAG2(mark) | KBTS__FEATURE_FLAG2(mkmk), 0ull}}},
   {7, {{0ull | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm) | KBTS__FEATURE_FLAG0(curs), 0ull, 0ull | KBTS__FEATURE_FLAG2(dist) | KBTS__FEATURE_FLAG2(kern) | KBTS__FEATURE_FLAG2(mark) | KBTS__FEATURE_FLAG2(mkmk), 0ull}}},
 };
-static kbts__op_list kbts__OpList_Khmer = {28, KBTS__ARRAY_LENGTH(kbts__FeatureStages_Khmer), kbts__FeatureStages_Khmer, KBTS__ARRAY_LENGTH(kbts__Ops_Khmer), kbts__Ops_Khmer};
+static kbts__op_list kbts__OpList_Khmer = {35, KBTS__ARRAY_LENGTH(kbts__FeatureStages_Khmer), kbts__FeatureStages_Khmer, KBTS__ARRAY_LENGTH(kbts__Ops_Khmer), kbts__Ops_Khmer};
 static kbts__op_kind kbts__Ops_Myanmar[] = {
   KBTS__OP_KIND_PRE_NORMALIZE_DOTTED_CIRCLES,
   KBTS__OP_KIND_NORMALIZE,
@@ -4626,10 +4627,10 @@ static kbts__feature_stage kbts__FeatureStages_Myanmar[] = {
   {1, {{0ull | KBTS__FEATURE_FLAG0(pref), 0ull, 0ull, 0ull}}},
   {1, {{0ull | KBTS__FEATURE_FLAG0(blwf), 0ull, 0ull, 0ull}}},
   {1, {{0ull | KBTS__FEATURE_FLAG0(pstf), 0ull, 0ull, 0ull}}},
-  {9, {{0ull | KBTS__FEATURE_FLAG0(abvs) | KBTS__FEATURE_FLAG0(blws) | KBTS__FEATURE_FLAG0(calt) | KBTS__FEATURE_FLAG0(clig), 0ull, 0ull | KBTS__FEATURE_FLAG2(pres) | KBTS__FEATURE_FLAG2(psts) | KBTS__FEATURE_FLAG2(rlig) | KBTS__FEATURE_FLAG2(liga) | KBTS__FEATURE_FLAG2(rclt), 0ull}}},
+  {16, {{0ull | KBTS__FEATURE_FLAG0(abvs) | KBTS__FEATURE_FLAG0(blws) | KBTS__FEATURE_FLAG0(calt) | KBTS__FEATURE_FLAG0(clig) | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm) | KBTS__FEATURE_FLAG0(curs), 0ull, 0ull | KBTS__FEATURE_FLAG2(pres) | KBTS__FEATURE_FLAG2(psts) | KBTS__FEATURE_FLAG2(rlig) | KBTS__FEATURE_FLAG2(liga) | KBTS__FEATURE_FLAG2(rclt) | KBTS__FEATURE_FLAG2(dist) | KBTS__FEATURE_FLAG2(kern) | KBTS__FEATURE_FLAG2(mark) | KBTS__FEATURE_FLAG2(mkmk), 0ull}}},
   {7, {{0ull | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm) | KBTS__FEATURE_FLAG0(curs), 0ull, 0ull | KBTS__FEATURE_FLAG2(dist) | KBTS__FEATURE_FLAG2(kern) | KBTS__FEATURE_FLAG2(mark) | KBTS__FEATURE_FLAG2(mkmk), 0ull}}},
 };
-static kbts__op_list kbts__OpList_Myanmar = {28, KBTS__ARRAY_LENGTH(kbts__FeatureStages_Myanmar), kbts__FeatureStages_Myanmar, KBTS__ARRAY_LENGTH(kbts__Ops_Myanmar), kbts__Ops_Myanmar};
+static kbts__op_list kbts__OpList_Myanmar = {35, KBTS__ARRAY_LENGTH(kbts__FeatureStages_Myanmar), kbts__FeatureStages_Myanmar, KBTS__ARRAY_LENGTH(kbts__Ops_Myanmar), kbts__Ops_Myanmar};
 static kbts__op_kind kbts__Ops_Tibetan[] = {
   KBTS__OP_KIND_BEGIN_GSUB,
   KBTS__OP_KIND_GSUB_FEATURES,
@@ -4642,10 +4643,10 @@ static kbts__op_kind kbts__Ops_Tibetan[] = {
 static kbts__feature_stage kbts__FeatureStages_Tibetan[] = {
   {1, {{0ull, 0ull, 0ull | KBTS__FEATURE_FLAG2(locl), 0ull}}},
   {1, {{0ull | KBTS__FEATURE_FLAG0(ccmp), 0ull, 0ull, 0ull}}},
-  {4, {{0ull | KBTS__FEATURE_FLAG0(abvs) | KBTS__FEATURE_FLAG0(blws) | KBTS__FEATURE_FLAG0(calt), 0ull, 0ull | KBTS__FEATURE_FLAG2(liga), 0ull}}},
+  {8, {{0ull | KBTS__FEATURE_FLAG0(abvs) | KBTS__FEATURE_FLAG0(blws) | KBTS__FEATURE_FLAG0(calt) | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm), 0ull, 0ull | KBTS__FEATURE_FLAG2(liga) | KBTS__FEATURE_FLAG2(kern) | KBTS__FEATURE_FLAG2(mkmk), 0ull}}},
   {4, {{0ull | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm), 0ull, 0ull | KBTS__FEATURE_FLAG2(kern) | KBTS__FEATURE_FLAG2(mkmk), 0ull}}},
 };
-static kbts__op_list kbts__OpList_Tibetan = {10, KBTS__ARRAY_LENGTH(kbts__FeatureStages_Tibetan), kbts__FeatureStages_Tibetan, KBTS__ARRAY_LENGTH(kbts__Ops_Tibetan), kbts__Ops_Tibetan};
+static kbts__op_list kbts__OpList_Tibetan = {14, KBTS__ARRAY_LENGTH(kbts__FeatureStages_Tibetan), kbts__FeatureStages_Tibetan, KBTS__ARRAY_LENGTH(kbts__Ops_Tibetan), kbts__Ops_Tibetan};
 static kbts__op_kind kbts__Ops_Use[] = {
   KBTS__OP_KIND_PRE_NORMALIZE_DOTTED_CIRCLES,
   KBTS__OP_KIND_NORMALIZE,
@@ -4674,10 +4675,10 @@ static kbts__feature_stage kbts__FeatureStages_Use[] = {
   {1, {{0ull | KBTS__FEATURE_FLAG0(pref), 0ull, 0ull, 0ull}}},
   {7, {{0ull | KBTS__FEATURE_FLAG0(abvf) | KBTS__FEATURE_FLAG0(blwf) | KBTS__FEATURE_FLAG0(cjct) | KBTS__FEATURE_FLAG0(half) | KBTS__FEATURE_FLAG0(pstf), 0ull, 0ull | KBTS__FEATURE_FLAG2(rkrf), 0ull | KBTS__FEATURE_FLAG3(vatu)}}},
   {4, {{0ull | KBTS__FEATURE_FLAG0(fina) | KBTS__FEATURE_FLAG0(init) | KBTS__FEATURE_FLAG0(isol) | KBTS__FEATURE_FLAG0(medi), 0ull, 0ull, 0ull}}},
-  {10, {{0ull | KBTS__FEATURE_FLAG0(abvs) | KBTS__FEATURE_FLAG0(blws) | KBTS__FEATURE_FLAG0(calt) | KBTS__FEATURE_FLAG0(clig), 0ull, 0ull | KBTS__FEATURE_FLAG2(haln) | KBTS__FEATURE_FLAG2(pres) | KBTS__FEATURE_FLAG2(psts) | KBTS__FEATURE_FLAG2(liga) | KBTS__FEATURE_FLAG2(rclt) | KBTS__FEATURE_FLAG2(rlig), 0ull}}},
+  {24, {{0ull | KBTS__FEATURE_FLAG0(abvs) | KBTS__FEATURE_FLAG0(blws) | KBTS__FEATURE_FLAG0(calt) | KBTS__FEATURE_FLAG0(clig) | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm) | KBTS__FEATURE_FLAG0(curs) | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm) | KBTS__FEATURE_FLAG0(curs), 0ull, 0ull | KBTS__FEATURE_FLAG2(haln) | KBTS__FEATURE_FLAG2(pres) | KBTS__FEATURE_FLAG2(psts) | KBTS__FEATURE_FLAG2(liga) | KBTS__FEATURE_FLAG2(rclt) | KBTS__FEATURE_FLAG2(rlig) | KBTS__FEATURE_FLAG2(dist) | KBTS__FEATURE_FLAG2(kern) | KBTS__FEATURE_FLAG2(mark) | KBTS__FEATURE_FLAG2(mkmk) | KBTS__FEATURE_FLAG2(dist) | KBTS__FEATURE_FLAG2(kern) | KBTS__FEATURE_FLAG2(mark) | KBTS__FEATURE_FLAG2(mkmk), 0ull}}},
   {7, {{0ull | KBTS__FEATURE_FLAG0(abvm) | KBTS__FEATURE_FLAG0(blwm) | KBTS__FEATURE_FLAG0(curs), 0ull, 0ull | KBTS__FEATURE_FLAG2(dist) | KBTS__FEATURE_FLAG2(kern) | KBTS__FEATURE_FLAG2(mark) | KBTS__FEATURE_FLAG2(mkmk), 0ull}}},
 };
-static kbts__op_list kbts__OpList_Use = {40, KBTS__ARRAY_LENGTH(kbts__FeatureStages_Use), kbts__FeatureStages_Use, KBTS__ARRAY_LENGTH(kbts__Ops_Use), kbts__Ops_Use};
+static kbts__op_list kbts__OpList_Use = {54, KBTS__ARRAY_LENGTH(kbts__FeatureStages_Use), kbts__FeatureStages_Use, KBTS__ARRAY_LENGTH(kbts__Ops_Use), kbts__Ops_Use};
 #define KBTS__MAXIMUM_DECOMPOSITION_CODEPOINTS 6
 typedef struct kbts__script_properties {
   kbts_u32 Tag;
@@ -13743,6 +13744,12 @@ KBTS_INLINE kbts_u16 kbts__ReadU16Unaligned(kbts_u16 *Data)
 {
   kbts_u16 Result;
   KBTS_MEMCPY(&Result, (void *)Data, sizeof(kbts_u16));
+  return Result;
+}
+KBTS_INLINE kbts_s16 kbts__ReadS16Unaligned(kbts_s16 *Data)
+{
+  kbts_s16 Result;
+  KBTS_MEMCPY(&Result, (void *)Data, sizeof(kbts_s16));
   return Result;
 }
 KBTS_INLINE void kbts__WriteU32Unaligned(kbts_u32 *Dest, kbts_u32 Value)
