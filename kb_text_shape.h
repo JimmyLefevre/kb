@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.12 - text segmentation and shaping
+/*  kb_text_shape - v2.13 - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1289,6 +1289,7 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     2.13  - Extend NO_BREAK flag to include attached glyphs.
      2.12  - Support fonts that use traditionally-GPOS features in GSUB.
      2.11  - Reduce the size of Unicode lookup tables from ~577KiB to ~423KiB.
              Fix a memory leak when recomposing glyphs in the shaper.
@@ -18613,7 +18614,7 @@ static void kbts__AttachGlyph(kbts_glyph_storage *Storage, kbts_glyph *Parent, k
 
   Child->OffsetX = X;
   Child->OffsetY = Y;
-  Child->Flags |= KBTS_GLYPH_FLAG_USED_IN_GPOS;
+  Child->Flags |= KBTS_GLYPH_FLAG_USED_IN_GPOS | KBTS_GLYPH_FLAG_NO_BREAK;
   Child->AttachGlyph = Parent;
 
   Parent->Flags |= KBTS_GLYPH_FLAG_USED_IN_GPOS;
