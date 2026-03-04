@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.13 - text segmentation and shaping
+/*  kb_text_shape - v2.14 - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1289,6 +1289,7 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     2.14  - Fix direction resolution for neutral characters surrounding digits.
      2.13  - Extend NO_BREAK flag to include attached glyphs.
      2.12  - Support fonts that use traditionally-GPOS features in GSUB.
      2.11  - Reduce the size of Unicode lookup tables from ~577KiB to ~423KiB.
@@ -27321,19 +27322,16 @@ static void kbts__BreakAddCodepoint(kbts_break_state *State, kbts_u32 Codepoint,
                                                            (KBTS_UNICODE_BIDIRECTIONAL_CLASS_AN)
                                                            (KBTS_UNICODE_BIDIRECTIONAL_CLASS_EN))))
       {
+        // From the Unicode Bidirectional Algorithm:
+        //   European and Arabic numbers act as if they were R in terms of their influence on NIs.
+        //
         // Note that the way we resolve digits is different from the way the Unicode standard specifies it.
         // This is because the standard assumes the paragraph direction is always known, whereas in our case it isn't.
         // We want neutral surrounded by uncoerced digits to resolve to the paragraph direction, which may be DONT_KNOW.
         Bidirectional1 = KBTS_UNICODE_BIDIRECTIONAL_CLASS_R;
       }
-      else if(((Bidirectional2 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_L) ||
-               (BidirectionalClass == KBTS_UNICODE_BIDIRECTIONAL_CLASS_L)) &&
-              KBTS__IN_SET(Bidirectional2, KBTS__SET32((KBTS_UNICODE_BIDIRECTIONAL_CLASS_L)
-                                                       (KBTS_UNICODE_BIDIRECTIONAL_CLASS_AN)
-                                                       (KBTS_UNICODE_BIDIRECTIONAL_CLASS_EN))) &&
-              KBTS__IN_SET(BidirectionalClass, KBTS__SET32((KBTS_UNICODE_BIDIRECTIONAL_CLASS_L)
-                                                           (KBTS_UNICODE_BIDIRECTIONAL_CLASS_AN)
-                                                           (KBTS_UNICODE_BIDIRECTIONAL_CLASS_EN))))
+      else if((Bidirectional2 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_L) &&
+              (BidirectionalClass == KBTS_UNICODE_BIDIRECTIONAL_CLASS_L))
       {
         Bidirectional1 = KBTS_UNICODE_BIDIRECTIONAL_CLASS_L;
       }
@@ -27341,6 +27339,7 @@ static void kbts__BreakAddCodepoint(kbts_break_state *State, kbts_u32 Codepoint,
       {
         if     (State->ParagraphDirection == KBTS_DIRECTION_LTR) Bidirectional1 = KBTS_UNICODE_BIDIRECTIONAL_CLASS_L;
         else if(State->ParagraphDirection == KBTS_DIRECTION_RTL) Bidirectional1 = KBTS_UNICODE_BIDIRECTIONAL_CLASS_R;
+        // Otherwise, don't coerce to anything.
       }
     }
 
