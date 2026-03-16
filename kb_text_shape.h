@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.14 - text segmentation and shaping
+/*  kb_text_shape - v2.15 - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1289,6 +1289,7 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     2.15  - Handle edge case when decomposing Thai/Lao Am vowels.
      2.14  - Fix direction resolution for neutral characters surrounding digits.
      2.13  - Extend NO_BREAK flag to include attached glyphs.
      2.12  - Support fonts that use traditionally-GPOS features in GSUB.
@@ -20686,6 +20687,11 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
           // the sara am codepoint.
           case 0xE33: case 0xEB3: // Sara am
           {
+            if(!AboveBaseGlyph)
+            {
+              AboveBaseGlyph = Glyph;
+            }
+
             kbts_glyph *NewGlyph = kbts__InsertGlyphBefore(Storage, AboveBaseGlyph, &Config->Nikhahit);
             if(!NewGlyph)
             {
@@ -20695,6 +20701,8 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
             kbts_glyph_config *GlyphConfig = Glyph->Config;
             kbts__SetGlyphPreserveLinksAndUserId(Glyph, &Config->SaraAa);
             Glyph->Config = GlyphConfig;
+
+            AboveBaseGlyph = 0;
           } break;
 
           case 0xE31: case 0xE34: case 0xE35: case 0xE36: case 0xE37: case 0xE3B:
