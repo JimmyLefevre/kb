@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.15 - text segmentation and shaping
+/*  kb_text_shape - v2.15a - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1289,6 +1289,7 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     2.15a - Fix GCC warnings
      2.15  - Handle edge case when decomposing Thai/Lao Am vowels.
      2.14  - Fix direction resolution for neutral characters surrounding digits.
      2.13  - Extend NO_BREAK flag to include attached glyphs.
@@ -1483,11 +1484,11 @@
 
 #  ifdef __has_attribute
 #    if __has_attribute(fallthrough)
-#      define KBTS_FALLTHROUGH __attribute__((fallthrough))
+#      define KBTS__FALLTHROUGH __attribute__((fallthrough))
 #    endif
 #  endif
-#  ifndef KBTS_FALLTHROUGH
-#    define KBTS_FALLTHROUGH
+#  ifndef KBTS__FALLTHROUGH
+#    define KBTS__FALLTHROUGH
 #  endif
 
 #  ifndef KBTS_EXPORT
@@ -12808,12 +12809,12 @@ KBTS_INLINE kbts_u32 kbts__GetDecompositionCodepoint(kbts_u64 Decomposition, kbt
 
 KBTS_INLINE kbts_u8 kbts__GetSyllabicClass(kbts_u16 SyllabicInfo)
 {
-  return SyllabicInfo & 0xFF;
+  return (kbts_u8)(SyllabicInfo & 0xFF);
 }
 
 KBTS_INLINE kbts_u8 kbts__GetSyllabicPosition(kbts_u16 SyllabicInfo)
 {
-  return SyllabicInfo >> 8;
+  return (kbts_u8)(SyllabicInfo >> 8);
 }
 
 KBTS_INLINE kbts_s32 *kbts__GetParentInfoDeltas(kbts_u32 ParentInfo)
@@ -16879,13 +16880,14 @@ KBTS_EXPORT int kbts_CodepointToGlyphId(kbts_font *Font, int ICodepoint)
       if(Offset < SubHeader->EntryCount)
       {
         kbts_u16 *GlyphIds = KBTS__POINTER_OFFSET(kbts_u16, &SubHeader->IdRangeOffset, SubHeader->IdRangeOffset);
-        kbts_u16 GlyphId = GlyphIds[Offset];
+        kbts_un GlyphId = GlyphIds[Offset];
+
         if(GlyphId)
         {
           GlyphId += SubHeader->IdDelta;
         }
 
-        Result = GlyphId;
+        Result = (kbts_u16)GlyphId;
       }
     } break;
 
@@ -18036,7 +18038,7 @@ static void kbts__SortGlyphBucket(kbts_shape_scratchpad *Scratchpad, kbts_un Seq
     }
     else
     {
-      Block->Count -= DeletedCount;
+      Block->Count -= (kbts_u32)DeletedCount;
 
       break;
     }
@@ -21792,6 +21794,7 @@ static kbts_glyph *kbts__BeginCluster(kbts_shape_scratchpad *Scratchpad, kbts_gl
               // Since half forms are always before the base, we can safely stop here.
               goto DoneScanningForBase;
             }
+            KBTS__FALLTHROUGH;
           case KBTS_INDIC_SYLLABIC_CLASS_NUKTA:
           case KBTS_INDIC_SYLLABIC_CLASS_ZWJ:
           case KBTS_INDIC_SYLLABIC_CLASS_ZWNJ:
@@ -21880,12 +21883,16 @@ static kbts_glyph *kbts__BeginCluster(kbts_shape_scratchpad *Scratchpad, kbts_gl
             Glyph != OnePastLastSyllableGlyph;
             Glyph = Glyph->Next)
         {
-          Glyph->SyllabicPosition <<= 4;
+          kbts_un SyllabicPosition = Glyph->SyllabicPosition;
 
-          if(Glyph->SyllabicPosition == (KBTS__SYLLABIC_POSITION_PREBASE_MATRA << 4))
+          SyllabicPosition <<= 4;
+
+          if(SyllabicPosition == (KBTS__SYLLABIC_POSITION_PREBASE_MATRA << 4))
           {
-            Glyph->SyllabicPosition += (15 - LeftMatraCount++) & 0xF;
+            SyllabicPosition += (15 - LeftMatraCount++) & 0xF;
           }
+
+          Glyph->SyllabicPosition = (kbts_u8)SyllabicPosition;
         }
       }
 
@@ -21947,6 +21954,7 @@ static kbts_glyph *kbts__BeginCluster(kbts_shape_scratchpad *Scratchpad, kbts_gl
                 {
                   Glyph->Prev->SyllabicPosition = Glyph->SyllabicPosition;
                 }
+                KBTS__FALLTHROUGH;
               case KBTS_INDIC_SYLLABIC_CLASS_MATRA:
                 Attach->CurrentPosition = Glyph->SyllabicPosition;
                 if((Attach->CurrentPosition >> 4) != KBTS__SYLLABIC_POSITION_PREBASE_MATRA)
@@ -21962,6 +21970,7 @@ static kbts_glyph *kbts__BeginCluster(kbts_shape_scratchpad *Scratchpad, kbts_gl
                   Glyph->SyllabicPosition = Attach->LastPositionThatWasNotPreBaseMatra;
                   break;
                 }
+                KBTS__FALLTHROUGH;
               case KBTS_INDIC_SYLLABIC_CLASS_NUKTA:
               case KBTS_INDIC_SYLLABIC_CLASS_ZWJ:
               case KBTS_INDIC_SYLLABIC_CLASS_ZWNJ:
@@ -23073,22 +23082,17 @@ static kbts_b32 kbts__ReadOp(kbts_shape_scratchpad *Scratchpad, kbts__op_kind En
 static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Script, kbts_language Language, void *Memory, kbts_un *Size)
 {
   kbts_shape_config *Result = 0;
-  kbts_shape_config DummyConfig;
   kbts__pointer_bump_allocator Bump = kbts__PointerBumpAllocator(Memory);
 
   if(Font)
   {
+    kbts_shape_config Config = KBTS__ZERO;
+
     Result = kbts__PointerPushType(&Bump, kbts_shape_config);
-    if(!Memory)
-    {
-      Result = &DummyConfig;
-    }
 
-    KBTS_MEMSET(Result, 0, sizeof(*Result));
-
-    Result->Font = Font;
-    Result->Script = Script;
-    Result->Language = Language;
+    Config.Font = Font;
+    Config.Script = Script;
+    Config.Language = Language;
 
     kbts__gsub_gpos *ShapingTables[2] = {
       kbts__BlobTableDataType(Font->Blob, KBTS_BLOB_TABLE_ID_GSUB, kbts__gsub_gpos),
@@ -23153,50 +23157,50 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
           }
         }
 
-        Result->Langsys[ShapingTableIndex] = ChosenLangsys;
+        Config.Langsys[ShapingTableIndex] = ChosenLangsys;
       }
     }
     
-    Result->IndicScriptProperties = kbts__IndicScriptProperties(Script);
-    Result->Shaper = FoundScriptIsIndic3 ? KBTS_SHAPER_USE : ScriptProperties->Shaper;
-    Result->OpList = *kbts__ShaperOpLists[Result->Shaper];
+    Config.IndicScriptProperties = kbts__IndicScriptProperties(Script);
+    Config.Shaper = FoundScriptIsIndic3 ? KBTS_SHAPER_USE : ScriptProperties->Shaper;
+    Config.OpList = *kbts__ShaperOpLists[Config.Shaper];
 
-    Result->Features = KBTS__ZERO_TYPE(kbts__feature_set);
-    KBTS__FOR(StageIndex, 0, Result->OpList.FeatureStageCount)
+    Config.Features = KBTS__ZERO_TYPE(kbts__feature_set);
+    KBTS__FOR(StageIndex, 0, Config.OpList.FeatureStageCount)
     {
-      kbts__feature_stage *Stage = &Result->OpList.FeatureStages[StageIndex];
+      kbts__feature_stage *Stage = &Config.OpList.FeatureStages[StageIndex];
 
-      KBTS__FOR(WordIndex, 0, KBTS__ARRAY_LENGTH(Result->Features.Flags))
+      KBTS__FOR(WordIndex, 0, KBTS__ARRAY_LENGTH(Config.Features.Flags))
       {
-        Result->Features.Flags[WordIndex] |= Stage->Features.Flags[WordIndex];
+        Config.Features.Flags[WordIndex] |= Stage->Features.Flags[WordIndex];
       }
     }
 
     kbts__feature *Rclt = 0;
     kbts__feature_set SyllableFeatureSet = {{KBTS__FEATURE_FLAG0(rphf) | KBTS__FEATURE_FLAG0(blwf) | KBTS__FEATURE_FLAG0(half) | KBTS__FEATURE_FLAG0(pstf) | KBTS__FEATURE_FLAG0(pref),
                                             0, KBTS__FEATURE_FLAG2(rclt) | KBTS__FEATURE_FLAG2(locl), KBTS__FEATURE_FLAG3(vatu)}};
-    kbts__iterate_features IterateFeatures = kbts__IterateFeatures(Result, KBTS_SHAPING_TABLE_GSUB, SyllableFeatureSet);
+    kbts__iterate_features IterateFeatures = kbts__IterateFeatures(&Config, KBTS_SHAPING_TABLE_GSUB, SyllableFeatureSet);
     while(kbts__NextFeature(&IterateFeatures))
     {
       switch(IterateFeatures.CurrentFeatureTag)
       {
-      case KBTS_FEATURE_TAG_blwf: Result->Blwf = IterateFeatures.Feature; break;
-      case KBTS_FEATURE_TAG_pref: Result->Pref = IterateFeatures.Feature; break;
-      case KBTS_FEATURE_TAG_pstf: Result->Pstf = IterateFeatures.Feature; break;
-      case KBTS_FEATURE_TAG_locl: Result->Locl = IterateFeatures.Feature; break;
-      case KBTS_FEATURE_TAG_rphf: Result->Rphf = IterateFeatures.Feature; break;
-      case KBTS_FEATURE_TAG_half: Result->Half = IterateFeatures.Feature; break;
-      case KBTS_FEATURE_TAG_vatu: Result->Vatu = IterateFeatures.Feature; break;
+      case KBTS_FEATURE_TAG_blwf: Config.Blwf = IterateFeatures.Feature; break;
+      case KBTS_FEATURE_TAG_pref: Config.Pref = IterateFeatures.Feature; break;
+      case KBTS_FEATURE_TAG_pstf: Config.Pstf = IterateFeatures.Feature; break;
+      case KBTS_FEATURE_TAG_locl: Config.Locl = IterateFeatures.Feature; break;
+      case KBTS_FEATURE_TAG_rphf: Config.Rphf = IterateFeatures.Feature; break;
+      case KBTS_FEATURE_TAG_half: Config.Half = IterateFeatures.Feature; break;
+      case KBTS_FEATURE_TAG_vatu: Config.Vatu = IterateFeatures.Feature; break;
       case KBTS_FEATURE_TAG_rclt: Rclt = IterateFeatures.Feature; break;
       }
     }
 
-    if((Result->Shaper == KBTS_SHAPER_ARABIC) && !Rclt)
+    if((Config.Shaper == KBTS_SHAPER_ARABIC) && !Rclt)
     {
-      Result->OpList = kbts__OpList_ArabicNoRclt;
+      Config.OpList = kbts__OpList_ArabicNoRclt;
     }
 
-    if(Result->IndicScriptProperties.ViramaCodepoint)
+    if(Config.IndicScriptProperties.ViramaCodepoint)
     {
       kbts_shape_scratchpad DummyScratchpad = KBTS__ZERO;
       kbts_glyph_storage DummyStorage = KBTS__ZERO;
@@ -23204,25 +23208,25 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
       KBTS__DLLIST_SENTINEL_INIT(&DummyStorage.FreeGlyphSentinel);
 
       // Bake the locl-ized virama.
-      kbts_glyph Virama = kbts_CodepointToGlyph(Font, (int)Result->IndicScriptProperties.ViramaCodepoint, 0, 0);
-      Result->Virama = kbts__Substitute1(&DummyScratchpad, Result, &DummyStorage, kbts__GetLookupList(Gsub), Result->Locl, KBTS__SKIP_FLAG_ZWNJ | KBTS__SKIP_FLAG_ZWJ, &Virama);
+      kbts_glyph Virama = kbts_CodepointToGlyph(Font, (int)Config.IndicScriptProperties.ViramaCodepoint, 0, 0);
+      Config.Virama = kbts__Substitute1(&DummyScratchpad, &Config, &DummyStorage, kbts__GetLookupList(Gsub), Config.Locl, KBTS__SKIP_FLAG_ZWNJ | KBTS__SKIP_FLAG_ZWJ, &Virama);
     }
 
-    if((Result->Script == KBTS_SCRIPT_THAI) || (Result->Script == KBTS_SCRIPT_LAO))
+    if((Config.Script == KBTS_SCRIPT_THAI) || (Config.Script == KBTS_SCRIPT_LAO))
     {
-      kbts_u32 NikhahitCodepoint = (Result->Script == KBTS_SCRIPT_THAI) ? 0xE4D : 0xECD;
-      kbts_u32 SaraAaCodepoint = (Result->Script == KBTS_SCRIPT_THAI) ? 0xE32 : 0xEB2;
-      Result->Nikhahit = kbts_CodepointToGlyph(Font, (int)NikhahitCodepoint, 0, 0);
-      Result->SaraAa = kbts_CodepointToGlyph(Font, (int)SaraAaCodepoint, 0, 0);
+      kbts_u32 NikhahitCodepoint = (Config.Script == KBTS_SCRIPT_THAI) ? 0xE4D : 0xECD;
+      kbts_u32 SaraAaCodepoint = (Config.Script == KBTS_SCRIPT_THAI) ? 0xE32 : 0xEB2;
+      Config.Nikhahit = kbts_CodepointToGlyph(Font, (int)NikhahitCodepoint, 0, 0);
+      Config.SaraAa = kbts_CodepointToGlyph(Font, (int)SaraAaCodepoint, 0, 0);
     }
 
-    Result->DottedCircle = kbts_CodepointToGlyph(Font, 0x25CC, 0, 0);
-    Result->Whitespace = kbts_CodepointToGlyph(Font, ' ', 0, 0);
+    Config.DottedCircle = kbts_CodepointToGlyph(Font, 0x25CC, 0, 0);
+    Config.Whitespace = kbts_CodepointToGlyph(Font, ' ', 0, 0);
 
-    kbts_u16 *FeatureStageFirstLookupIndices = kbts__PointerPushArray(&Bump, kbts_u16, Result->OpList.FeatureStageCount + 1);
+    kbts_u16 *FeatureStageFirstLookupIndices = kbts__PointerPushArray(&Bump, kbts_u16, Config.OpList.FeatureStageCount + 1);
     if(Memory)
     {
-      KBTS__FOR(FeatureStageIndex, 0, Result->OpList.FeatureStageCount + 1)
+      KBTS__FOR(FeatureStageIndex, 0, Config.OpList.FeatureStageCount + 1)
       {
         FeatureStageFirstLookupIndices[FeatureStageIndex] = 0;
       }
@@ -23244,9 +23248,9 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
         kbts_un ThisSequentialLookupCount = 0;
         kbts_un FeatureStageIndex = 0;
 
-        KBTS__FOR(OpIndex, 0, Result->OpList.OpCount)
+        KBTS__FOR(OpIndex, 0, Config.OpList.OpCount)
         {
-          kbts__op_kind Op = Result->OpList.Ops[OpIndex];
+          kbts__op_kind Op = Config.OpList.Ops[OpIndex];
           kbts_b32 UserFeaturesAllowed = KBTS__IN_SET(Op, KBTS__SET32((KBTS__OP_KIND_GSUB_FEATURES_WITH_USER)
                                                                       (KBTS__OP_KIND_GPOS_FEATURES)));
 
@@ -23254,10 +23258,10 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
                                           (KBTS__OP_KIND_GSUB_FEATURES_WITH_USER)
                                           (KBTS__OP_KIND_GPOS_FEATURES))))
           {
-            kbts__feature_stage *FeatureStage = &Result->OpList.FeatureStages[FeatureStageIndex];
+            kbts__feature_stage *FeatureStage = &Config.OpList.FeatureStages[FeatureStageIndex];
             kbts_shaping_table ShapingTable = (kbts_shaping_table)((Op == KBTS__OP_KIND_GPOS_FEATURES) ? KBTS_SHAPING_TABLE_GPOS : KBTS_SHAPING_TABLE_GSUB);
             kbts__gsub_gpos *GsubGpos = ShapingTables[ShapingTable];
-            kbts__langsys *Langsys = Result->Langsys[ShapingTable];
+            kbts__langsys *Langsys = Config.Langsys[ShapingTable];
             kbts_un BakedFeatureLookupIndexCount = 0;
 
             kbts__baked_feature BakedFeatures[KBTS_MAX_SIMULTANEOUS_FEATURES];
@@ -23279,7 +23283,7 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
 
                 if(Feature.Feature->LookupIndexCount &&
                    ((UserFeaturesAllowed &&
-                     !kbts__ContainsFeature(&Result->Features, FeatureId)) ||
+                     !kbts__ContainsFeature(&Config.Features, FeatureId)) ||
                     kbts__ContainsFeature(&FeatureStage->Features, FeatureId)))
                 {
                   BakedFeatureCount += 1;
@@ -23307,14 +23311,14 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
                    // Leaving the feature in its default stage seems like the better thing to do, because, supposedly, these features
                    // will have been designed to apply at a specific point in the pipeline, and moving them makes little sense.
                    ((UserFeaturesAllowed &&
-                     !kbts__ContainsFeature(&Result->Features, FeatureId)) ||
+                     !kbts__ContainsFeature(&Config.Features, FeatureId)) ||
                     kbts__ContainsFeature(&FeatureStage->Features, FeatureId)))
                 {
                   kbts__baked_feature BakedFeature = KBTS__ZERO;
                   BakedFeature.FeatureTag = Feature.Tag;
                   BakedFeature.FeatureId = FeatureId;
                   // CAREFUL: We use SkipFlags as a temporary index until the end of the stage.
-                  BakedFeature.SkipFlags = kbts__SkipFlags(BakedFeature.FeatureId, Result->Shaper);
+                  BakedFeature.SkipFlags = kbts__SkipFlags(BakedFeature.FeatureId, Config.Shaper);
                   BakedFeature.Count = Feature.Feature->LookupIndexCount;
                   // These point directly into the file.
                   BakedFeature.Indices = KBTS__POINTER_AFTER(kbts_u16, Feature.Feature);
@@ -23337,7 +23341,7 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
                   // Indic scripts.
                   // However, Harfbuzz does _not_ do this, so it seems like a bunch of work that would, at best, make us diverge from
                   // Harfbuzz more often.
-                  if((Result->Shaper != KBTS_SHAPER_MYANMAR) && (FeatureId >= 1) && (FeatureId <= 32))
+                  if((Config.Shaper != KBTS_SHAPER_MYANMAR) && (FeatureId >= 1) && (FeatureId <= 32))
                   {
                     // These must properly map KBTS__FEATURE_ID to kbts_glyph_flags!
                     BakedFeature.GlyphFilter = (1u << (FeatureId - 1)) & KBTS__GLYPH_FEATURE_MASK;
@@ -23452,7 +23456,7 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
               FeatureStageFirstLookupIndices[FeatureStageIndex + 1] = (kbts_u16)ThisSequentialLookupCount;
             }
 
-            KBTS_ASSERT(FeatureStageIndex < Result->OpList.FeatureStageCount);
+            KBTS_ASSERT(FeatureStageIndex < Config.OpList.FeatureStageCount);
             FeatureStageIndex += 1;
           }
         }
@@ -23485,18 +23489,17 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
         }
       }
 
-      if(Memory)
-      {
-        Result->SequentialLookups = SequentialLookups;
-        Result->IdSequentialLookupMatrix = IdSequentialLookupMatrix;
-        Result->GlyphCount = Font->Blob->GlyphCount;
-        Result->LookupCount = Font->Blob->LookupCount;
-      }
+      Config.SequentialLookups = SequentialLookups;
+      Config.IdSequentialLookupMatrix = IdSequentialLookupMatrix;
+      Config.GlyphCount = Font->Blob->GlyphCount;
+      Config.LookupCount = Font->Blob->LookupCount;
     }
+
+    Config.FeatureStageFirstLookupIndices = FeatureStageFirstLookupIndices;
 
     if(Memory)
     {
-      Result->FeatureStageFirstLookupIndices = FeatureStageFirstLookupIndices;
+      *Result = Config;
     }
   }
 
@@ -26501,7 +26504,8 @@ KBTS_EXPORT void kbts_GetFontInfo2(kbts_font *Font, kbts_font_info2 *Info)
         {
           Info2_2->CapitalHeight = Os2->CapHeight;
         }
-      } // Fallthrough
+      }
+      KBTS__FALLTHROUGH;
 
       case sizeof(kbts_font_info2_1):
       {
@@ -26529,7 +26533,8 @@ KBTS_EXPORT void kbts_GetFontInfo2(kbts_font *Font, kbts_font_info2 *Info)
           Info2_1->XMax = Head->XMax;
           Info2_1->YMax = Head->YMax;
         }
-      } // Fallthrough
+      }
+      KBTS__FALLTHROUGH;
 
       case sizeof(kbts_font_info2):
       {
@@ -27451,7 +27456,7 @@ static void kbts__BreakAddCodepoint(kbts_break_state *State, kbts_u32 Codepoint,
       // (RI RI)* RI x RI
       KBTS_C2(RI, RI):
         WordBreakHistory = 0;
-        // fallthrough
+        KBTS__FALLTHROUGH;
       KBTS_C2(HL, SQ):
       KBTS_C2(ALnep, ALnep): KBTS_C2(ALnep, ALep): KBTS_C2(ALnep, HL): KBTS_C2(ALnep, NM): KBTS_C2(ALnep, ENL):
       KBTS_C2(ALep, ALnep): KBTS_C2(ALep, ALep): KBTS_C2(ALep, HL): KBTS_C2(ALep, NM): KBTS_C2(ALep, ENL):
@@ -28496,23 +28501,23 @@ KBTS_EXPORT kbts_encode_utf8 kbts_EncodeUtf8(int Codepoint)
     }
     else if(Codepoint <= 0x7FF)
     {
-        Result.Encoded[1] = (Codepoint & 0x3F) | 0x80;
-        Result.Encoded[0] = ((Codepoint >> 6) & 0x1F) | 0xC0;
+        Result.Encoded[1] = (char)((Codepoint & 0x3F) | 0x80);
+        Result.Encoded[0] = (char)(((Codepoint >> 6) & 0x1F) | 0xC0);
         Result.EncodedLength = 2;
     }
     else if(Codepoint <= 0xFFFF)
     {
-        Result.Encoded[2] = (Codepoint & 0x3F) | 0x80;
-        Result.Encoded[1] = ((Codepoint >> 6) & 0x3F) | 0x80;
-        Result.Encoded[0] = ((Codepoint >> 12) & 0xF) | 0xE0;
+        Result.Encoded[2] = (char)((Codepoint & 0x3F) | 0x80);
+        Result.Encoded[1] = (char)(((Codepoint >> 6) & 0x3F) | 0x80);
+        Result.Encoded[0] = (char)(((Codepoint >> 12) & 0xF) | 0xE0);
         Result.EncodedLength = 3;
     }
     else if(Codepoint <= 0x10FFFF)
     {
-        Result.Encoded[3] = (Codepoint & 0x3F) | 0x80;
-        Result.Encoded[2] = ((Codepoint >> 6) & 0x3F) | 0x80;
-        Result.Encoded[1] = ((Codepoint >> 12) & 0x3F) | 0x80;
-        Result.Encoded[0] = ((Codepoint >> 18) & 0x7) | 0xF0;
+        Result.Encoded[3] = (char)((Codepoint & 0x3F) | 0x80);
+        Result.Encoded[2] = (char)(((Codepoint >> 6) & 0x3F) | 0x80);
+        Result.Encoded[1] = (char)(((Codepoint >> 12) & 0x3F) | 0x80);
+        Result.Encoded[0] = (char)(((Codepoint >> 18) & 0x7) | 0xF0);
         Result.EncodedLength = 4;
     }
 
