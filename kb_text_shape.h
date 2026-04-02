@@ -423,7 +423,7 @@
             User IDs for the corresponding codepoints start at [UserId].
             If [UserIdGenerationMode] is KBTS_USER_ID_GENERATION_MODE_CODEPOINT_INDEX,
             each codepoint will increment the user ID by 1.
-            If [UserIdGenerationMode] is KBTS_USER_ID_GENERATION_MODE_CODEPOINT_INDEX,
+            If [UserIdGenerationMode] is KBTS_USER_ID_GENERATION_MODE_SOURCE_INDEX,
             each codepoint will increment the user ID by the length of its encoding in
             UTF-8.
 
@@ -439,7 +439,7 @@
             user ID counter.
             If [UserIdGenerationMode] is KBTS_USER_ID_GENERATION_MODE_CODEPOINT_INDEX,
             each codepoint will increment the user ID by 1.
-            If [UserIdGenerationMode] is KBTS_USER_ID_GENERATION_MODE_CODEPOINT_INDEX,
+            If [UserIdGenerationMode] is KBTS_USER_ID_GENERATION_MODE_SOURCE_INDEX,
             each codepoint will increment the user ID by the length of its encoding in
             bytes in UTF-8.
 
