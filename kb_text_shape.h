@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.16 - text segmentation and shaping
+/*  kb_text_shape - v2.17 - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -265,11 +265,19 @@
           kbts_shape_context *kbts_PlaceShapeContext(kbts_allocator_function *Allocator, void *AllocatorData, void *Memory)
             Equivalent to calling kbts_PlaceShapeContext2 with Flags = KBTS_SHAPE_CONTEXT_FLAG_NONE.
 
+          :kbts_PlaceShapeContextFixedMemory2
+          :PlaceShapeContextFixedMemory2
+          kbts_shape_context *kbts_PlaceShapeContextFixedMemory(void *Memory, int Size, kbts_shape_context_flags Flags)
+            Places a context at Memory and initializes it.
+            This context will only use the [Size] bytes located at [Memory] for its allocations.
+
+            For more details on [Flags], see :kbts_PlaceShapeContext2.
+
           :kbts_PlaceShapeContextFixedMemory
           :PlaceShapeContextFixedMemory
           kbts_shape_context *kbts_PlaceShapeContextFixedMemory(void *Memory, int Size)
-            Places a context at Memory and initializes it.
-            This context will only use the [Size] bytes located at [Memory] for its allocations.
+            Equivalent to calling kbts_PlaceShapeContextFixedMemory2 with
+            Flags = KBTS_SHAPE_CONTEXT_FLAG_NONE.
 
           :kbts_CreateShapeContext2
           :CreateShapeContext2
@@ -1312,6 +1320,7 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     2.17  - New function: kbts_PlaceShapeContextFixedMemory2.
      2.16  - New type: kbts_shape_context_flags.
              New functions: kbts_PlaceShapeContext2, kbts_CreateShapeContext2.
              Fix a bug where ShapeCodepointIteratorNext() returned a null terminator when
@@ -3810,6 +3819,7 @@ typedef struct kbts_run
 KBTS_EXPORT int kbts_SizeOfShapeContext(void);
 KBTS_EXPORT kbts_shape_context *kbts_PlaceShapeContext2(kbts_allocator_function *Allocator, void *AllocatorData, void *Memory, kbts_shape_context_flags Flags);
 KBTS_EXPORT kbts_shape_context *kbts_PlaceShapeContext(kbts_allocator_function *Allocator, void *AllocatorData, void *Memory);
+KBTS_EXPORT kbts_shape_context *kbts_PlaceShapeContextFixedMemory2(void *Memory, int Size, kbts_shape_context_flags Flags);
 KBTS_EXPORT kbts_shape_context *kbts_PlaceShapeContextFixedMemory(void *Memory, int Size);
 KBTS_EXPORT kbts_shape_context *kbts_CreateShapeContext2(kbts_allocator_function *Allocator, void *AllocatorData, kbts_shape_context_flags Flags);
 KBTS_EXPORT kbts_shape_context *kbts_CreateShapeContext(kbts_allocator_function *Allocator, void *AllocatorData);
@@ -23686,7 +23696,7 @@ KBTS_EXPORT kbts_shape_context *kbts_PlaceShapeContext(kbts_allocator_function *
   return Result;
 }
 
-KBTS_EXPORT kbts_shape_context *kbts_PlaceShapeContextFixedMemory(void *Memory, int Size)
+KBTS_EXPORT kbts_shape_context *kbts_PlaceShapeContextFixedMemory2(void *Memory, int Size, kbts_shape_context_flags Flags)
 {
   kbts_shape_context *Result = 0;
   kbts_un SizeOfShapeContext = kbts_SizeOfShapeContext();
@@ -23697,9 +23707,15 @@ KBTS_EXPORT kbts_shape_context *kbts_PlaceShapeContextFixedMemory(void *Memory, 
     kbts_arena *Arena = (kbts_arena *)KBTS__POINTER_OFFSET(kbts_arena, Memory, SizeOfShapeContext);
     kbts__InitializeFixedMemoryArena(Arena, KBTS__POINTER_AFTER(void, Arena), (kbts_un)Size - ContextAndArenaSize);
 
-    Result = kbts_PlaceShapeContext(kbts__ArenaAllocator, Arena, Memory);
+    Result = kbts_PlaceShapeContext2(kbts__ArenaAllocator, Arena, Memory, Flags);
   }
 
+  return Result;
+}
+
+KBTS_EXPORT kbts_shape_context *kbts_PlaceShapeContextFixedMemory(void *Memory, int Size)
+{
+  kbts_shape_context *Result = kbts_PlaceShapeContextFixedMemory2(Memory, Size, KBTS_SHAPE_CONTEXT_FLAG_NONE);
   return Result;
 }
 
