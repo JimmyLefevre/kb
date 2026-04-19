@@ -728,6 +728,99 @@
             Equivalent to calling kbts_GetFontInfo2 with an Info struct of type
             kbts_font_info2.
 
+        DIRECT:VARIABLE FONTS
+          OpenType variable fonts pack many design styles (weight, width, italic,
+          optical size, plus arbitrary parametric axes) into a single .ttf, and
+          the active design point is selected at runtime by setting axis values.
+
+          :kbts_FontIsVariable
+          :FontIsVariable
+          int kbts_FontIsVariable(kbts_font *Font)
+            Returns nonzero if [Font] has an `fvar` table (i.e. is a variable font).
+
+          :kbts_axis_value
+          :axis_value
+          typedef struct kbts_axis_value
+          {
+            kbts_u32 Tag;     // e.g. KBTS_FOURCC('w','g','h','t')
+            kbts_s32 Value;   // 16.16 fixed in the axis's user-coordinate space
+          } kbts_axis_value;
+
+          :kbts_axis_info
+          :axis_info
+          typedef struct kbts_axis_info
+          {
+            kbts_u32 Tag;
+            kbts_s32 MinValue;     // 16.16 fixed
+            kbts_s32 DefaultValue; // 16.16 fixed
+            kbts_s32 MaxValue;     // 16.16 fixed
+            kbts_u16 NameId;       // 'name' table id describing the axis
+            kbts_axis_flags Flags; // KBTS_AXIS_FLAG_HIDDEN currently the only flag
+          } kbts_axis_info;
+
+          :kbts_instance_info
+          :instance_info
+          typedef struct kbts_instance_info
+          {
+            kbts_u16 SubfamilyNameId;
+            kbts_u16 PostScriptNameId; // 0 if not present
+          } kbts_instance_info;
+
+          :kbts_FontVariationAxisCount
+          :FontVariationAxisCount
+          kbts_u32 kbts_FontVariationAxisCount(kbts_font *Font)
+            Number of axes in the font's `fvar` table, or 0 if the font isn't variable.
+
+          :kbts_GetFontVariationAxis
+          :GetFontVariationAxis
+          void kbts_GetFontVariationAxis(kbts_font *Font, kbts_u32 Index, kbts_axis_info *Out)
+            Fill [Out] with axis [Index]'s tag, range, and metadata.
+            [Index] is in the range [0, kbts_FontVariationAxisCount).
+
+          :kbts_FontVariationInstanceCount
+          :FontVariationInstanceCount
+          kbts_u32 kbts_FontVariationInstanceCount(kbts_font *Font)
+            Number of named instances in the font's `fvar` table.
+            A named instance is the (axis, value) tuple plus a human-readable
+            subfamily name (e.g. "Bold Italic").
+
+          :kbts_GetFontVariationInstance
+          :GetFontVariationInstance
+          void kbts_GetFontVariationInstance(kbts_font *Font, kbts_u32 Index,
+                                             kbts_instance_info *OutInfo,
+                                             kbts_s32 *OutCoords, kbts_u32 OutCoordsCapacity)
+            Fill [OutInfo] with instance [Index]'s name ids, and write up to
+            [OutCoordsCapacity] axis user-coords (16.16 fixed) into [OutCoords].
+            One coord per axis, in the same order as kbts_GetFontVariationAxis.
+            Either [OutInfo] or [OutCoords] may be null to skip that output.
+
+          :kbts_SetFontVariations
+          :SetFontVariation
+          void kbts_SetFontVariations(kbts_font *Font, kbts_axis_value *Values, kbts_u32 ValueCount)
+            Selects a design point for [Font]. Pass a sparse list of
+            (tag, user-value) pairs; any axis tag not in the list reverts to its
+            fvar default. Tags not present in the font are silently ignored.
+            Pass ValueCount=0 to reset to the default instance.
+
+            User values are 16.16 fixed in the axis's user-coordinate space.
+            Values out of range for an axis are clamped.
+
+            Per-shape effects: HVAR (advances), VVAR (vertical advances), MVAR
+            (font metrics), and GDEF item-variation-store adjustments to GPOS
+            placement / kerning / mark anchors are looked up at shape time and
+            pick up the new selection on the next shape call.
+
+            FeatureVariations (the GSUB/GPOS feature swaps that complex fonts
+            use to switch glyph shapes between weight ranges, e.g. rvrn) are
+            evaluated when a kbts_shape_config is created. If you change the
+            variation after creating a shape config, re-create the config to
+            pick up new FeatureVariations decisions.
+
+            kbts_GetFontInfo2 reports Weight/Width/StyleFlags derived from the
+            current selection (mapped to the nearest standard OS/2 bucket) so
+            "is this font Bold right now?" answers correctly without a separate
+            query API.
+
         DIRECT:SHAPE CONFIG
           :kbts_SizeOfShapeConfig
           :SizeOfShapeConfig
@@ -2404,6 +2497,11 @@ enum kbts_blob_table_id_enum
   KBTS_BLOB_TABLE_ID_MAXP,
   KBTS_BLOB_TABLE_ID_OS2,
   KBTS_BLOB_TABLE_ID_NAME,
+  KBTS_BLOB_TABLE_ID_FVAR,
+  KBTS_BLOB_TABLE_ID_AVAR,
+  KBTS_BLOB_TABLE_ID_HVAR,
+  KBTS_BLOB_TABLE_ID_VVAR,
+  KBTS_BLOB_TABLE_ID_MVAR,
 
   KBTS_BLOB_TABLE_ID_COUNT,
 };
@@ -2436,8 +2534,9 @@ enum kbts_blob_version_enum
   KBTS_BLOB_VERSION_INVALID,
   KBTS_BLOB_VERSION_INITIAL,
   KBTS_BLOB_VERSION_REMOVED_SUBTABLE_INFOS_ALIGNED_TABLES,
+  KBTS_BLOB_VERSION_ADDED_VARIATION_TABLES,
 
-  KBTS_BLOB_VERSION_CURRENT = KBTS_BLOB_VERSION_REMOVED_SUBTABLE_INFOS_ALIGNED_TABLES,
+  KBTS_BLOB_VERSION_CURRENT = KBTS_BLOB_VERSION_ADDED_VARIATION_TABLES,
 };
 
 typedef kbts_u32 kbts_font_style_flags;
@@ -2485,6 +2584,37 @@ enum kbts_font_width_enum
 
   KBTS_FONT_WIDTH_COUNT,
 };
+
+// One axis-tag/value pair used by kbts_SetFontVariations. Values are 16.16 fixed
+// in the axis's user-coordinate space (the same scale fvar reports for axis
+// min/default/max).
+typedef struct kbts_axis_value
+{
+  kbts_u32 Tag;     // e.g. KBTS_FOURCC('w','g','h','t')
+  kbts_s32 Value;   // 16.16 fixed
+} kbts_axis_value;
+
+typedef kbts_u32 kbts_axis_flags;
+enum kbts_axis_flags_enum
+{
+  KBTS_AXIS_FLAG_HIDDEN = (1 << 0),
+};
+
+typedef struct kbts_axis_info
+{
+  kbts_u32 Tag;
+  kbts_s32 MinValue;     // 16.16 fixed
+  kbts_s32 DefaultValue; // 16.16 fixed
+  kbts_s32 MaxValue;     // 16.16 fixed
+  kbts_u16 NameId;       // 'name' table id describing the axis
+  kbts_axis_flags Flags;
+} kbts_axis_info;
+
+typedef struct kbts_instance_info
+{
+  kbts_u16 SubfamilyNameId;
+  kbts_u16 PostScriptNameId; // 0 if not present
+} kbts_instance_info;
 
 typedef kbts_u32 kbts_glyph_flags;
 enum kbts_glyph_flags_enum
@@ -3452,6 +3582,10 @@ typedef struct kbts_blob_header
   kbts_blob_table Tables[KBTS_BLOB_TABLE_ID_COUNT];
 } kbts_blob_header;
 
+#ifndef KBTS_MAX_VARIATION_AXES
+#define KBTS_MAX_VARIATION_AXES 16
+#endif
+
 typedef struct kbts_font
 {
   kbts_allocator_function *Allocator;
@@ -3462,6 +3596,31 @@ typedef struct kbts_font
   kbts__cmap_14 *Cmap14;
 
   kbts__gsub_gpos *ShapingTables[KBTS_SHAPING_TABLE_COUNT];
+
+  // F2DOT14 normalized axis values. Zero = default instance.
+  kbts_s16 NormalizedCoords[KBTS_MAX_VARIATION_AXES];
+
+  // Cached variable-font table pointers; resolved once at load. Null when absent.
+  // GdefIvs is the GDEF ItemVariationStore, not the GDEF table itself.
+  struct kbts__fvar *Fvar;
+  struct kbts__avar *Avar;
+  struct kbts__hvar *Hvar;
+  struct kbts__vvar *Vvar;
+  struct kbts__mvar *Mvar;
+  struct kbts__item_variation_store *GdefIvs;
+
+  // Nonzero when any NormalizedCoord is nonzero. Lets variation lookups
+  // short-circuit to zero deltas for the default instance (and for non-variable fonts).
+  kbts_b32 HasNonDefaultVariation;
+
+  // Per-field overrides for kbts_GetFontInfo2. KBTS_FONT_WEIGHT_UNKNOWN /
+  // KBTS_FONT_WIDTH_UNKNOWN mean "not overridden — fall back to OS/2 defaults".
+  // EffectiveItalicValid indicates the italic flag has been explicitly set
+  // via an ital or slnt axis value.
+  kbts_font_weight EffectiveWeight;
+  kbts_font_width  EffectiveWidth;
+  kbts_b32         EffectiveItalic;
+  kbts_b32         EffectiveItalicValid;
 
   void *UserData;
 
@@ -3865,6 +4024,31 @@ KBTS_EXPORT int kbts_FontCount(void *FileData, int FileSize);
 KBTS_EXPORT kbts_font kbts_FontFromMemory(void *FileData, int FileSize, int FontIndex, kbts_allocator_function *Allocator, void *AllocatorData);
 KBTS_EXPORT void kbts_FreeFont(kbts_font *Font);
 KBTS_EXPORT int kbts_FontIsValid(kbts_font *Font);
+KBTS_EXPORT int kbts_FontIsVariable(kbts_font *Font);
+
+// Variable-font axis introspection.
+KBTS_EXPORT kbts_u32 kbts_FontVariationAxisCount(kbts_font *Font);
+KBTS_EXPORT void     kbts_GetFontVariationAxis(kbts_font *Font, kbts_u32 Index, kbts_axis_info *Out);
+KBTS_EXPORT kbts_u32 kbts_FontVariationInstanceCount(kbts_font *Font);
+KBTS_EXPORT void     kbts_GetFontVariationInstance(kbts_font *Font, kbts_u32 Index, kbts_instance_info *OutInfo,
+                                                   kbts_s32 *OutCoords, kbts_u32 OutCoordsCapacity);
+
+// Set the font's variation. Pass a sparse list of (tag, user-value) pairs;
+// any axis tag not in the list reverts to its fvar default. Tags not present
+// in the font are silently ignored. Pass ValueCount=0 to reset to default-instance.
+//
+// User values are 16.16 fixed in the axis's user-coordinate space. Values out of
+// range for an axis are clamped to the axis range.
+//
+// Per-shape effects: HVAR (advances), MVAR (metrics), and GDEF item-variation-store
+// adjustments are looked up at shape time and pick up the new selection on the
+// next shape call.
+//
+// FeatureVariations (the GSUB/GPOS feature swaps that complex fonts use to switch
+// glyph shapes between weight ranges) are evaluated when a kbts_shape_config is
+// created. If you change the variation after creating a shape config, re-create
+// the config to pick up new FeatureVariations decisions.
+KBTS_EXPORT void kbts_SetFontVariations(kbts_font *Font, kbts_axis_value *Values, kbts_u32 ValueCount);
 KBTS_EXPORT kbts_load_font_error kbts_LoadFont(kbts_font *Font, kbts_load_font_state *State, void *FontData, int FontDataSize, int FontIndex, int *ScratchSize_, int *OutputSize_);
 KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_state *State, void *ScratchMemory, void *OutputMemory);
 KBTS_EXPORT void kbts_GetFontInfo(kbts_font *Font, kbts_font_info *Info);
@@ -14192,6 +14376,139 @@ typedef struct kbts__feature_table_substitution_record
   kbts_u32 AlternateFeatureOffset;
 } kbts__feature_table_substitution_record;
 
+typedef struct kbts__fvar
+{
+  kbts_u16 Major;
+  kbts_u16 Minor;
+  kbts_u16 AxesArrayOffset;
+  kbts_u16 Reserved;
+  kbts_u16 AxisCount;
+  kbts_u16 AxisSize;
+  kbts_u16 InstanceCount;
+  kbts_u16 InstanceSize;
+  // kbts__variation_axis_record Axes[AxisCount]; at AxesArrayOffset
+  // kbts__instance_record_header Instances[InstanceCount]; immediately after axes
+} kbts__fvar;
+
+typedef struct kbts__variation_axis_record
+{
+  kbts_u32 Tag;
+  kbts_s32 MinValue;     // Fixed (16.16) user-scale value
+  kbts_s32 DefaultValue; // Fixed (16.16) user-scale value
+  kbts_s32 MaxValue;     // Fixed (16.16) user-scale value
+  kbts_u16 Flags;        // bit 0 = HIDDEN
+  kbts_u16 AxisNameId;
+} kbts__variation_axis_record;
+
+typedef struct kbts__instance_record_header
+{
+  kbts_u16 SubfamilyNameId;
+  kbts_u16 Flags;
+  // kbts_s32 Coordinates[AxisCount]; (Fixed 16.16, user-scale)
+  // kbts_u16 PostScriptNameId; // optional, present iff InstanceSize == 4 + 4*AxisCount + 2
+} kbts__instance_record_header;
+
+typedef struct kbts__avar_axis_value_map
+{
+  kbts_s16 FromCoordinate; // F2DOT14 normalized
+  kbts_s16 ToCoordinate;   // F2DOT14 normalized
+} kbts__avar_axis_value_map;
+
+typedef struct kbts__avar_segment_map
+{
+  kbts_u16 PositionMapCount;
+  // kbts__avar_axis_value_map AxisValueMaps[PositionMapCount];
+} kbts__avar_segment_map;
+
+typedef struct kbts__avar
+{
+  kbts_u16 Major;
+  kbts_u16 Minor;
+  kbts_u16 Reserved;
+  kbts_u16 AxisCount;
+  // kbts__avar_segment_map SegmentMaps[AxisCount];
+} kbts__avar;
+
+// ItemVariationStore (used by HVAR/MVAR/GDEF for variation deltas).
+// Inside the surrounding `#pragma pack(push, 1)` block: no padding.
+typedef struct kbts__item_variation_store
+{
+  kbts_u16 Format;                          // always 1
+  kbts_u32 VariationRegionListOffset;       // from start of IVS
+  kbts_u16 ItemVariationDataCount;
+  // kbts_u32 ItemVariationDataOffsets[ItemVariationDataCount]; (from start of IVS)
+} kbts__item_variation_store;
+
+typedef struct kbts__variation_region_list_header
+{
+  kbts_u16 AxisCount;
+  kbts_u16 RegionCount;
+  // kbts__variation_region_axis Axes[AxisCount * RegionCount];
+} kbts__variation_region_list_header;
+
+typedef struct kbts__variation_region_axis
+{
+  kbts_s16 StartCoord; // F2DOT14
+  kbts_s16 PeakCoord;  // F2DOT14
+  kbts_s16 EndCoord;   // F2DOT14
+} kbts__variation_region_axis;
+
+typedef struct kbts__item_variation_data
+{
+  kbts_u16 ItemCount;
+  kbts_u16 WordDeltaCount; // bit 15 = LONG_WORDS; low bits = number of leading wide entries
+  kbts_u16 RegionIndexCount;
+  // kbts_u16 RegionIndexes[RegionIndexCount];
+  // delta sets follow
+} kbts__item_variation_data;
+
+typedef struct kbts__delta_set_index_map_header
+{
+  kbts_u8 Format;       // 0 or 1
+  kbts_u8 EntryFormat;  // bits 0-3 = innerIndexBits-1; bits 4-5 = entrySize-1
+  // format 0: u16 mapCount; format 1: u32 mapCount
+  // followed by entrySize bytes per entry
+} kbts__delta_set_index_map_header;
+
+typedef struct kbts__hvar
+{
+  kbts_u16 Major;
+  kbts_u16 Minor;
+  kbts_u32 ItemVariationStoreOffset;     // from start of HVAR
+  kbts_u32 AdvanceWidthMappingOffset;    // 0 if implicit
+  kbts_u32 LsbMappingOffset;             // 0 if not present
+  kbts_u32 RsbMappingOffset;             // 0 if not present
+} kbts__hvar;
+
+typedef struct kbts__vvar
+{
+  kbts_u16 Major;
+  kbts_u16 Minor;
+  kbts_u32 ItemVariationStoreOffset;        // from start of VVAR
+  kbts_u32 AdvanceHeightMappingOffset;      // 0 if implicit
+  kbts_u32 TopSideBearingMappingOffset;     // 0 if not present
+  kbts_u32 BottomSideBearingMappingOffset;  // 0 if not present
+  kbts_u32 VerticalOriginMappingOffset;     // 0 if not present
+} kbts__vvar;
+
+typedef struct kbts__mvar_value_record
+{
+  kbts_u32 ValueTag;       // OT MVAR value tag, e.g. 'hasc', 'hdsc', 'hlgp', 'cpht'
+  kbts_u16 DeltaSetOuterIndex;
+  kbts_u16 DeltaSetInnerIndex;
+} kbts__mvar_value_record;
+
+typedef struct kbts__mvar
+{
+  kbts_u16 Major;
+  kbts_u16 Minor;
+  kbts_u16 Reserved;
+  kbts_u16 ValueRecordSize;          // typically 8
+  kbts_u16 ValueRecordCount;
+  kbts_u16 ItemVariationStoreOffset; // from start of MVAR (note: u16 here, u32 in HVAR)
+  // kbts__mvar_value_record ValueRecords[ValueRecordCount];
+} kbts__mvar;
+
 typedef struct kbts__ttc_header
 {
   kbts_u32 Magic; // ttcf
@@ -14750,6 +15067,71 @@ typedef struct kbts__maxp
 
 #  pragma pack(pop)
 
+// Byte-swap an OpenType ItemVariationStore in place. Used by HVAR / VVAR / MVAR /
+// GDEF. Walks the IVS header, region list, and per-data-item headers; the actual
+// delta values stay big-endian and are read at use time.
+//
+// Returns 1 on success, 0 if any structural offset/count would walk past TableEnd.
+static int kbts__ByteSwapItemVariationStore(kbts__item_variation_store *Ivs, char *TableEnd)
+{
+  if((char *)Ivs + sizeof(kbts__item_variation_store) > TableEnd) return 0;
+
+  Ivs->Format                    = kbts__ByteSwap16(Ivs->Format);
+  Ivs->VariationRegionListOffset = kbts__ByteSwap32(Ivs->VariationRegionListOffset);
+  Ivs->ItemVariationDataCount    = kbts__ByteSwap16(Ivs->ItemVariationDataCount);
+
+  kbts_u32 *DataOffsets = KBTS__POINTER_AFTER(kbts_u32, Ivs);
+  if((char *)(DataOffsets + Ivs->ItemVariationDataCount) > TableEnd) return 0;
+  kbts__ByteSwapArray32Unchecked(DataOffsets, Ivs->ItemVariationDataCount);
+
+  kbts__variation_region_list_header *RegionList =
+    KBTS__POINTER_OFFSET(kbts__variation_region_list_header, Ivs, Ivs->VariationRegionListOffset);
+  if((char *)(RegionList + 1) > TableEnd) return 0;
+  kbts__ByteSwapArray16Unchecked(&RegionList->AxisCount, 2);
+
+  kbts_un RegionShortCount = (kbts_un)RegionList->AxisCount * RegionList->RegionCount * 3;
+  if((char *)(RegionList + 1) + RegionShortCount * sizeof(kbts_u16) > TableEnd) return 0;
+  kbts__ByteSwapArray16Unchecked((kbts_u16 *)(RegionList + 1), RegionShortCount);
+
+  KBTS__FOR(I, 0, Ivs->ItemVariationDataCount)
+  {
+    kbts_u32 DataOffset = kbts__ReadU32Unaligned(&DataOffsets[I]);
+    if(DataOffset == 0) continue;
+
+    kbts__item_variation_data *Data = KBTS__POINTER_OFFSET(kbts__item_variation_data, Ivs, DataOffset);
+    if((char *)Data + sizeof(kbts__item_variation_data) > TableEnd) continue;
+    kbts__ByteSwapArray16Unchecked(&Data->ItemCount, 3);
+
+    kbts_u16 *RegionIndexes = KBTS__POINTER_AFTER(kbts_u16, Data);
+    if((char *)(RegionIndexes + Data->RegionIndexCount) > TableEnd) continue;
+    kbts__ByteSwapArray16Unchecked(RegionIndexes, Data->RegionIndexCount);
+  }
+  return 1;
+}
+
+// Byte-swap the header of a DeltaSetIndexMap (Format 0 or 1). Entries themselves
+// stay big-endian and are read byte-by-byte at lookup time. BytesAvailable is the
+// remaining bytes after MapBase, used to bounds-check the variable-size mapCount.
+static void kbts__ByteSwapDeltaSetIndexMapHeader(kbts_u8 *MapBase, kbts_un BytesAvailable)
+{
+  if(BytesAvailable < 4) return;
+  kbts_u8 Format = MapBase[0];
+  if(Format == 0)
+  {
+    kbts_u16 RawCount;
+    KBTS_MEMCPY(&RawCount, MapBase + 2, 2);
+    RawCount = kbts__ByteSwap16(RawCount);
+    KBTS_MEMCPY(MapBase + 2, &RawCount, 2);
+  }
+  else if((Format == 1) && (BytesAvailable >= 6))
+  {
+    kbts_u32 RawCount;
+    KBTS_MEMCPY(&RawCount, MapBase + 2, 4);
+    RawCount = kbts__ByteSwap32(RawCount);
+    KBTS_MEMCPY(MapBase + 2, &RawCount, 4);
+  }
+}
+
 //
 // Unpack functions for TTF structs.
 //
@@ -15167,22 +15549,25 @@ static kbts__chained_sequence_rule *kbts__GetChainedClassSequenceRule(kbts__chai
   return Result;
 }
 
-#if 0 // @Incomplete
 static kbts__feature_variation_pointer kbts__GetFeatureVariation(kbts__feature_variations *Variations, kbts_un Index)
 {
   kbts__feature_variation_record *Records = (kbts__feature_variation_record *)(Variations + 1);
   kbts__feature_variation_record *Record = &Records[Index];
 
   kbts__feature_variation_pointer Result;
-  Result.ConditionSet = KBTS__POINTER_OFFSET(kbts__condition_set, Variations, Record->ConditionSetOffset);
-  Result.FeatureTableSubstitution = KBTS__POINTER_OFFSET(kbts__feature_table_substitution, Variations, Record->FeatureTableSubstitutionOffset);
+  Result.ConditionSet = Record->ConditionSetOffset
+                      ? KBTS__POINTER_OFFSET(kbts__condition_set, Variations, Record->ConditionSetOffset)
+                      : 0;
+  Result.FeatureTableSubstitution = Record->FeatureTableSubstitutionOffset
+                                  ? KBTS__POINTER_OFFSET(kbts__feature_table_substitution, Variations, Record->FeatureTableSubstitutionOffset)
+                                  : 0;
   return Result;
 }
 
 static kbts__condition_1 *kbts__GetCondition(kbts__condition_set *Set, kbts_un Index)
 {
   kbts_u32 *Offsets = (kbts_u32 *)(Set + 1);
-  kbts__condition_1 *Result = KBTS__POINTER_OFFSET(kbts__condition_1, Set, Offsets[Index]);
+  kbts__condition_1 *Result = KBTS__POINTER_OFFSET(kbts__condition_1, Set, kbts__ReadU32Unaligned(&Offsets[Index]));
   return Result;
 }
 
@@ -15196,7 +15581,6 @@ static kbts__feature_substitution_pointer kbts__GetFeatureSubstitution(kbts__fea
   Result.AlternateFeature = KBTS__POINTER_OFFSET(kbts__feature, Table, Record->AlternateFeatureOffset);
   return Result;
 }
-#endif
 
 static kbts__cmap_subtable_pointer kbts__GetCmapSubtable(kbts__cmap *Cmap, kbts_un Index)
 {
@@ -15508,7 +15892,6 @@ static void kbts__ByteSwapGsubGposCommon(kbts__byteswap_context *Context, kbts__
       }
     }
 
-    // @Incomplete
     if((Header->Minor == 1) && Header->FeatureVariationsOffset)
     {
       kbts__feature_variations *FeatureVariations = KBTS__POINTER_OFFSET(kbts__feature_variations, Header, Header->FeatureVariationsOffset);
@@ -15536,7 +15919,7 @@ static void kbts__ByteSwapGsubGposCommon(kbts__byteswap_context *Context, kbts__
 
             KBTS__FOR(ConditionIndex, 0, Set->Count)
             {
-              kbts__condition_1 *Condition = KBTS__POINTER_OFFSET(kbts__condition_1, Set, ConditionOffsets[ConditionIndex]);
+              kbts__condition_1 *Condition = KBTS__POINTER_OFFSET(kbts__condition_1, Set, kbts__ReadU32Unaligned(&ConditionOffsets[ConditionIndex]));
 
               if(!kbts__AlreadyVisited(Context, Condition))
               {
@@ -15544,7 +15927,6 @@ static void kbts__ByteSwapGsubGposCommon(kbts__byteswap_context *Context, kbts__
               }
             }
 
-            // @Incomplete
             kbts__feature_table_substitution *FeatureSubst = KBTS__POINTER_OFFSET(kbts__feature_table_substitution, FeatureVariations, Record->FeatureTableSubstitutionOffset);
 
             if(!kbts__AlreadyVisited(Context, FeatureSubst))
@@ -15637,6 +16019,8 @@ static void kbts__ByteSwapCoverage(kbts__byteswap_context *Context, kbts__covera
   }
 }
 
+static void kbts__ByteSwapDevice(kbts__byteswap_context *Context, kbts__device *Device);
+
 static void kbts__ByteSwapAnchor(kbts__byteswap_context *Context, kbts__anchor *Anchor)
 {
   if(!kbts__AlreadyVisited(Context, Anchor))
@@ -15654,6 +16038,20 @@ static void kbts__ByteSwapAnchor(kbts__byteswap_context *Context, kbts__anchor *
     }
 
     kbts__ByteSwapArray16Context((kbts_u16 *)&Anchor->X, U16Count, Context);
+
+    if(Anchor->Format == 3)
+    {
+      // Format 3 carries optional X/Y Device tables; byte-swap their headers so
+      // the variation-index lookup at shape time sees host-order fields.
+      if(Anchor->U.XDeviceOffset)
+      {
+        kbts__ByteSwapDevice(Context, KBTS__POINTER_OFFSET(kbts__device, Anchor, Anchor->U.XDeviceOffset));
+      }
+      if(Anchor->YDeviceOffset)
+      {
+        kbts__ByteSwapDevice(Context, KBTS__POINTER_OFFSET(kbts__device, Anchor, Anchor->YDeviceOffset));
+      }
+    }
   }
 }
 
@@ -16844,6 +17242,411 @@ static void *kbts__BlobTableData(kbts_blob_header *Header, kbts_blob_table_id Ta
 }
 #define kbts__BlobTableDataType(Header, TableId, Type) (Type *)kbts__BlobTableData((Header), (TableId))
 
+static kbts__fvar *kbts__GetFvar(kbts_font *Font)
+{
+  return Font ? Font->Fvar : 0;
+}
+
+static kbts__variation_axis_record *kbts__GetVariationAxis(kbts__fvar *Fvar, kbts_un AxisIndex)
+{
+  kbts__variation_axis_record *Result = 0;
+  if(Fvar && (AxisIndex < Fvar->AxisCount))
+  {
+    kbts_u8 *Base = (kbts_u8 *)Fvar + Fvar->AxesArrayOffset;
+    Result = (kbts__variation_axis_record *)(Base + AxisIndex * Fvar->AxisSize);
+  }
+  return Result;
+}
+
+static kbts__instance_record_header *kbts__GetInstanceRecord(kbts__fvar *Fvar, kbts_un InstanceIndex)
+{
+  kbts__instance_record_header *Result = 0;
+  if(Fvar && (InstanceIndex < Fvar->InstanceCount))
+  {
+    kbts_u8 *Base = (kbts_u8 *)Fvar + Fvar->AxesArrayOffset + (kbts_un)Fvar->AxisCount * Fvar->AxisSize;
+    Result = (kbts__instance_record_header *)(Base + InstanceIndex * Fvar->InstanceSize);
+  }
+  return Result;
+}
+
+static kbts_s32 *kbts__GetInstanceCoords(kbts__instance_record_header *Instance)
+{
+  return (kbts_s32 *)(Instance + 1);
+}
+
+static kbts__avar *kbts__GetAvar(kbts_font *Font)
+{
+  kbts__avar *Result = 0;
+  if(Font)
+  {
+    Result = Font->Avar;
+  }
+  return Result;
+}
+
+static kbts__avar_segment_map *kbts__GetAvarSegmentMap(kbts__avar *Avar, kbts_un AxisIndex)
+{
+  kbts__avar_segment_map *Result = 0;
+  if(Avar && (AxisIndex < Avar->AxisCount))
+  {
+    kbts_u8 *Cursor = (kbts_u8 *)(Avar + 1);
+    KBTS__FOR(I, 0, AxisIndex)
+    {
+      kbts__avar_segment_map *Map = (kbts__avar_segment_map *)Cursor;
+      Cursor += sizeof(kbts__avar_segment_map) + (kbts_un)Map->PositionMapCount * sizeof(kbts__avar_axis_value_map);
+    }
+    Result = (kbts__avar_segment_map *)Cursor;
+  }
+  return Result;
+}
+
+static kbts_s16 kbts__ApplyAvarSegment(kbts__avar_segment_map *Map, kbts_s16 NormalizedCoord)
+{
+  // Per OpenType spec, an avar segment map of <2 entries is meaningless; ignore it.
+  kbts_s16 Result = NormalizedCoord;
+  if(Map && (Map->PositionMapCount >= 2))
+  {
+    kbts__avar_axis_value_map *Pairs = (kbts__avar_axis_value_map *)(Map + 1);
+    kbts_un Last = (kbts_un)Map->PositionMapCount - 1;
+
+    if(NormalizedCoord <= Pairs[0].FromCoordinate)
+    {
+      Result = Pairs[0].ToCoordinate;
+    }
+    else if(NormalizedCoord >= Pairs[Last].FromCoordinate)
+    {
+      Result = Pairs[Last].ToCoordinate;
+    }
+    else
+    {
+      KBTS__FOR(I, 1, Map->PositionMapCount)
+      {
+        if(NormalizedCoord <= Pairs[I].FromCoordinate)
+        {
+          kbts_s32 TNum   = (kbts_s32)NormalizedCoord - Pairs[I-1].FromCoordinate;
+          kbts_s32 TDen   = (kbts_s32)Pairs[I].FromCoordinate - Pairs[I-1].FromCoordinate;
+          kbts_s32 ToDiff = (kbts_s32)Pairs[I].ToCoordinate - Pairs[I-1].ToCoordinate;
+          Result = (kbts_s16)((kbts_s32)Pairs[I-1].ToCoordinate + (ToDiff * TNum) / TDen);
+          break;
+        }
+      }
+    }
+  }
+  return Result;
+}
+
+static kbts_s16 kbts__NormalizeAxisValue(kbts__variation_axis_record *Axis, kbts__avar_segment_map *AvarMap, kbts_s32 UserValue)
+{
+  // Clamp user value into axis range first.
+  if(UserValue < Axis->MinValue) UserValue = Axis->MinValue;
+  if(UserValue > Axis->MaxValue) UserValue = Axis->MaxValue;
+
+  kbts_s32 Normalized;
+  if(UserValue == Axis->DefaultValue)
+  {
+    Normalized = 0;
+  }
+  else if(UserValue < Axis->DefaultValue)
+  {
+    kbts_s64 Num = (kbts_s64)(UserValue - Axis->DefaultValue) * 16384;
+    kbts_s64 Den = (kbts_s64)(Axis->DefaultValue - Axis->MinValue);
+    Normalized = (Den != 0) ? (kbts_s32)(Num / Den) : 0;
+  }
+  else
+  {
+    kbts_s64 Num = (kbts_s64)(UserValue - Axis->DefaultValue) * 16384;
+    kbts_s64 Den = (kbts_s64)(Axis->MaxValue - Axis->DefaultValue);
+    Normalized = (Den != 0) ? (kbts_s32)(Num / Den) : 0;
+  }
+
+  if(Normalized < -16384) Normalized = -16384;
+  if(Normalized > 16384) Normalized = 16384;
+
+  return kbts__ApplyAvarSegment(AvarMap, (kbts_s16)Normalized);
+}
+
+// Resolve a (glyph_id) -> (outer, inner) lookup via a DeltaSetIndexMap.
+// If MapBase is null, falls back to the implicit mapping outer=0, inner=glyph_id.
+static void kbts__ResolveDeltaSetIndexMap(kbts_u8 *MapBase, kbts_un GlyphId, kbts_un *OuterOut, kbts_un *InnerOut)
+{
+  if(!MapBase)
+  {
+    *OuterOut = 0;
+    *InnerOut = GlyphId;
+    return;
+  }
+
+  kbts_u8 Format = MapBase[0];
+  kbts_u8 EntryFormat = MapBase[1];
+  kbts_un InnerBits = ((kbts_un)EntryFormat & 0xF) + 1;
+  kbts_un EntrySize = (((kbts_un)EntryFormat >> 4) & 0x3) + 1;
+
+  kbts_un MapCount;
+  kbts_u8 *Entries;
+  if(Format == 0)
+  {
+    kbts_u16 RawCount;
+    KBTS_MEMCPY(&RawCount, MapBase + 2, 2);
+    MapCount = RawCount;
+    Entries = MapBase + 4;
+  }
+  else
+  {
+    kbts_u32 RawCount;
+    KBTS_MEMCPY(&RawCount, MapBase + 2, 4);
+    MapCount = RawCount;
+    Entries = MapBase + 6;
+  }
+
+  kbts_un Index = (GlyphId < MapCount) ? GlyphId : (MapCount ? (MapCount - 1) : 0);
+  kbts_u8 *Entry = Entries + Index * EntrySize;
+
+  // Read big-endian packed entry.
+  kbts_u32 Packed = 0;
+  KBTS__FOR(B, 0, EntrySize)
+  {
+    Packed = (Packed << 8) | Entry[B];
+  }
+
+  *InnerOut = (kbts_un)(Packed & ((1u << InnerBits) - 1));
+  *OuterOut = (kbts_un)(Packed >> InnerBits);
+}
+
+// Look up a delta value from an ItemVariationStore at (OuterIndex, InnerIndex), and
+// combine with the font's normalized coords to produce a font-units delta.
+// AxisCount is the number of axes the caller wants to weight against (typically the font's fvar AxisCount).
+static kbts_s32 kbts__IvsDelta(kbts__item_variation_store *Ivs, kbts_s16 *NormalizedCoords, kbts_un AxisCount,
+                               kbts_un OuterIndex, kbts_un InnerIndex)
+{
+  kbts_s32 Result = 0;
+
+  if(!Ivs || (OuterIndex >= Ivs->ItemVariationDataCount))
+  {
+    return 0;
+  }
+
+  kbts_u32 *DataOffsets = KBTS__POINTER_AFTER(kbts_u32, Ivs);
+  kbts_u32 DataOffset = kbts__ReadU32Unaligned(&DataOffsets[OuterIndex]);
+  if(!DataOffset)
+  {
+    return 0;
+  }
+
+  kbts__item_variation_data *Data = KBTS__POINTER_OFFSET(kbts__item_variation_data, Ivs, DataOffset);
+  if(InnerIndex >= Data->ItemCount)
+  {
+    return 0;
+  }
+
+  kbts__variation_region_list_header *RegionList = KBTS__POINTER_OFFSET(kbts__variation_region_list_header, Ivs, Ivs->VariationRegionListOffset);
+  kbts_un RegionAxisCount = RegionList->AxisCount;
+  kbts__variation_region_axis *RegionAxes = (kbts__variation_region_axis *)(RegionList + 1);
+
+  kbts_u16 *RegionIndexes = KBTS__POINTER_AFTER(kbts_u16, Data);
+
+  kbts_u16 WordDeltaField = Data->WordDeltaCount;
+  kbts_b32 LongWords = (WordDeltaField & 0x8000u) != 0;
+  kbts_un Words = WordDeltaField & 0x7FFFu;
+  kbts_un RegionIndexCount = Data->RegionIndexCount;
+  if(Words > RegionIndexCount) Words = RegionIndexCount;
+
+  kbts_un BytesPerWord = LongWords ? 4 : 2;
+  kbts_un BytesPerSmall = LongWords ? 2 : 1;
+  kbts_un DeltaSetSize = Words * BytesPerWord + (RegionIndexCount - Words) * BytesPerSmall;
+
+  kbts_u8 *DeltaSet = (kbts_u8 *)(RegionIndexes + RegionIndexCount) + InnerIndex * DeltaSetSize;
+
+  KBTS__FOR(R, 0, RegionIndexCount)
+  {
+    kbts_un RegionIdx = kbts__ReadU16Unaligned(&RegionIndexes[R]);
+    if(RegionIdx >= RegionList->RegionCount) continue;
+
+    // Read delta value (big-endian on disk).
+    kbts_s32 Delta;
+    if(R < Words)
+    {
+      if(LongWords)
+      {
+        kbts_u32 Raw;
+        KBTS_MEMCPY(&Raw, DeltaSet + R * 4, 4);
+        Delta = (kbts_s32)kbts__ByteSwap32(Raw);
+      }
+      else
+      {
+        kbts_u16 Raw;
+        KBTS_MEMCPY(&Raw, DeltaSet + R * 2, 2);
+        Delta = (kbts_s16)kbts__ByteSwap16(Raw);
+      }
+    }
+    else
+    {
+      kbts_un Off = (R - Words) * BytesPerSmall;
+      if(LongWords)
+      {
+        kbts_u16 Raw;
+        KBTS_MEMCPY(&Raw, DeltaSet + Words * 4 + Off, 2);
+        Delta = (kbts_s16)kbts__ByteSwap16(Raw);
+      }
+      else
+      {
+        Delta = (kbts_s8)DeltaSet[Words * 2 + Off];
+      }
+    }
+
+    // Region scalar from normalized coords.
+    kbts__variation_region_axis *Axes = &RegionAxes[RegionIdx * RegionAxisCount];
+    kbts_s32 Scalar = 16384;
+
+    KBTS__FOR(A, 0, RegionAxisCount)
+    {
+      kbts_s16 Coord = (A < AxisCount) ? NormalizedCoords[A] : 0;
+      kbts_s16 Start = Axes[A].StartCoord;
+      kbts_s16 Peak  = Axes[A].PeakCoord;
+      kbts_s16 End   = Axes[A].EndCoord;
+
+      kbts_s32 AxisScalar;
+      if(Peak == 0)
+      {
+        AxisScalar = 16384;
+      }
+      else if((Coord < Start) || (Coord > End))
+      {
+        AxisScalar = 0;
+      }
+      else if(Coord == Peak)
+      {
+        AxisScalar = 16384;
+      }
+      else if(Coord < Peak)
+      {
+        AxisScalar = ((kbts_s32)(Coord - Start) * 16384) / ((kbts_s32)Peak - Start);
+      }
+      else
+      {
+        AxisScalar = ((kbts_s32)(End - Coord) * 16384) / ((kbts_s32)End - Peak);
+      }
+
+      Scalar = (Scalar * AxisScalar) >> 14;
+
+      if(Scalar == 0) break; // entire region contributes 0
+    }
+
+    Result += (kbts_s32)(((kbts_s64)Delta * Scalar) >> 14);
+  }
+
+  return Result;
+}
+
+// MVAR delta lookup by tag. Returns 0 if MVAR absent, tag not present, or font has no fvar.
+static kbts_s32 kbts__ApplyMvarDelta(kbts_font *Font, kbts_u32 ValueTag)
+{
+  if(!Font->HasNonDefaultVariation) return 0;
+  kbts__mvar *Mvar = Font->Mvar;
+  kbts__fvar *Fvar = Font->Fvar;
+  if(!Mvar || !Fvar) return 0;
+
+  // Records are spec'd to be sorted by tag and ValueRecordSize is at least 8;
+  // when it's larger, walk byte-by-byte rather than as a contiguous record array.
+  kbts_u8 *RecordsBase = (kbts_u8 *)Mvar + sizeof(kbts__mvar);
+  KBTS__FOR(I, 0, Mvar->ValueRecordCount)
+  {
+    kbts__mvar_value_record *Rec = (kbts__mvar_value_record *)(RecordsBase + I * Mvar->ValueRecordSize);
+    if(Rec->ValueTag == ValueTag)
+    {
+      kbts__item_variation_store *Ivs = KBTS__POINTER_OFFSET(kbts__item_variation_store, Mvar, Mvar->ItemVariationStoreOffset);
+      return kbts__IvsDelta(Ivs, Font->NormalizedCoords, Fvar->AxisCount,
+                            Rec->DeltaSetOuterIndex,
+                            Rec->DeltaSetInnerIndex);
+    }
+  }
+  return 0;
+}
+
+// HVAR advance-width delta for a glyph, in font units. Returns 0 if no HVAR or
+// if the font is at the default instance.
+static kbts_s32 kbts__ApplyHvarAdvanceDelta(kbts_font *Font, kbts_un GlyphId)
+{
+  if(!Font->HasNonDefaultVariation) return 0;
+  kbts__hvar *Hvar = Font->Hvar;
+  kbts__fvar *Fvar = Font->Fvar;
+  if(!Hvar || !Fvar) return 0;
+
+  kbts_un Outer, Inner;
+  kbts_u8 *AdvMap = Hvar->AdvanceWidthMappingOffset
+                  ? ((kbts_u8 *)Hvar + Hvar->AdvanceWidthMappingOffset)
+                  : 0;
+  kbts__ResolveDeltaSetIndexMap(AdvMap, GlyphId, &Outer, &Inner);
+
+  kbts__item_variation_store *Ivs = KBTS__POINTER_OFFSET(kbts__item_variation_store, Hvar, Hvar->ItemVariationStoreOffset);
+  return kbts__IvsDelta(Ivs, Font->NormalizedCoords, Fvar->AxisCount, Outer, Inner);
+}
+
+// VVAR advance-height delta for a glyph in vertical layout, in font units.
+static kbts_s32 kbts__ApplyVvarAdvanceDelta(kbts_font *Font, kbts_un GlyphId)
+{
+  if(!Font->HasNonDefaultVariation) return 0;
+  kbts__vvar *Vvar = Font->Vvar;
+  kbts__fvar *Fvar = Font->Fvar;
+  if(!Vvar || !Fvar) return 0;
+
+  kbts_un Outer, Inner;
+  kbts_u8 *AdvMap = Vvar->AdvanceHeightMappingOffset
+                  ? ((kbts_u8 *)Vvar + Vvar->AdvanceHeightMappingOffset)
+                  : 0;
+  kbts__ResolveDeltaSetIndexMap(AdvMap, GlyphId, &Outer, &Inner);
+
+  kbts__item_variation_store *Ivs = KBTS__POINTER_OFFSET(kbts__item_variation_store, Vvar, Vvar->ItemVariationStoreOffset);
+  return kbts__IvsDelta(Ivs, Font->NormalizedCoords, Fvar->AxisCount, Outer, Inner);
+}
+
+// Map a 16.16-fixed wght user value to the nearest standard kbts_font_weight bucket.
+static kbts_font_weight kbts__WeightFromFixed(kbts_s32 UserValue)
+{
+  kbts_s32 V = (UserValue + (1 << 15)) >> 16;
+  kbts_s32 Bucket = (V + 50) / 100;
+  if(Bucket < (kbts_s32)KBTS_FONT_WEIGHT_THIN)  Bucket = (kbts_s32)KBTS_FONT_WEIGHT_THIN;
+  if(Bucket > (kbts_s32)KBTS_FONT_WEIGHT_BLACK) Bucket = (kbts_s32)KBTS_FONT_WEIGHT_BLACK;
+  return (kbts_font_weight)Bucket;
+}
+
+// Map a 16.16-fixed wdth user value to the nearest kbts_font_width bucket.
+static kbts_font_width kbts__WidthFromFixed(kbts_s32 UserValue)
+{
+  static const kbts_s32 WidthValues[9] = {
+    (kbts_s32) 50 << 16,
+    ((kbts_s32) 62 << 16) | (kbts_s32)32768,
+    (kbts_s32) 75 << 16,
+    ((kbts_s32) 87 << 16) | (kbts_s32)32768,
+    (kbts_s32)100 << 16,
+    ((kbts_s32)112 << 16) | (kbts_s32)32768,
+    (kbts_s32)125 << 16,
+    (kbts_s32)150 << 16,
+    (kbts_s32)200 << 16,
+  };
+  static const kbts_font_width Map[9] = {
+    KBTS_FONT_WIDTH_ULTRA_CONDENSED,
+    KBTS_FONT_WIDTH_EXTRA_CONDENSED,
+    KBTS_FONT_WIDTH_CONDENSED,
+    KBTS_FONT_WIDTH_SEMI_CONDENSED,
+    KBTS_FONT_WIDTH_NORMAL,
+    KBTS_FONT_WIDTH_SEMI_EXPANDED,
+    KBTS_FONT_WIDTH_EXPANDED,
+    KBTS_FONT_WIDTH_EXTRA_EXPANDED,
+    KBTS_FONT_WIDTH_ULTRA_EXPANDED,
+  };
+
+  kbts_un Best = 0;
+  kbts_s32 BestDiff = UserValue - WidthValues[0];
+  if(BestDiff < 0) BestDiff = -BestDiff;
+  KBTS__FOR(I, 1, 9)
+  {
+    kbts_s32 Diff = UserValue - WidthValues[I];
+    if(Diff < 0) Diff = -Diff;
+    if(Diff < BestDiff) { BestDiff = Diff; Best = I; }
+  }
+  return Map[Best];
+}
+
 static kbts_glyph_classes kbts__GlyphClasses(kbts_font *Font, kbts_u32 Id)
 {
   kbts_glyph_classes Result = KBTS__ZERO;
@@ -17067,13 +17870,69 @@ KBTS_EXPORT kbts_glyph kbts_CodepointToGlyph(kbts_font *Font, int ICodepoint, kb
   return Result;
 }
 
+// Resolve the FeatureTableSubstitution whose ConditionSet matches the font's current
+// normalized variation coords, or null if none matches (or the font is at default).
+// First-match-wins. The returned pointer is valid as long as the font's blob is.
+static kbts__feature_table_substitution *kbts__MatchFeatureSubstitution(kbts_font *Font, kbts__gsub_gpos *Header)
+{
+  if(!Header || (Header->Minor != 1) || !Header->FeatureVariationsOffset) return 0;
+  if(!Font->HasNonDefaultVariation) return 0;
+
+  kbts__fvar *Fvar = Font->Fvar;
+  if(!Fvar) return 0;
+  kbts_un AxisCount = Fvar->AxisCount;
+  if(AxisCount > KBTS_MAX_VARIATION_AXES) AxisCount = KBTS_MAX_VARIATION_AXES;
+
+  kbts__feature_variations *Variations = KBTS__POINTER_OFFSET(kbts__feature_variations, Header, Header->FeatureVariationsOffset);
+
+  KBTS__FOR(VI, 0, Variations->RecordCount)
+  {
+    kbts__feature_variation_pointer Variation = kbts__GetFeatureVariation(Variations, VI);
+
+    // An empty or null ConditionSet always matches.
+    kbts_b32 Match = 1;
+    if(Variation.ConditionSet && Variation.ConditionSet->Count)
+    {
+      KBTS__FOR(CI, 0, Variation.ConditionSet->Count)
+      {
+        kbts__condition_1 *Cond = kbts__GetCondition(Variation.ConditionSet, CI);
+        // Format 1 is the only condition format kbts supports today.
+        if(Cond->Format != 1) { Match = 0; break; }
+        if(Cond->AxisIndex >= AxisCount) { Match = 0; break; }
+        kbts_s16 Coord = Font->NormalizedCoords[Cond->AxisIndex];
+        if(Coord < (kbts_s16)Cond->FilterRangeMinValue) { Match = 0; break; }
+        if(Coord > (kbts_s16)Cond->FilterRangeMaxValue) { Match = 0; break; }
+      }
+    }
+
+    if(Match) return Variation.FeatureTableSubstitution;
+  }
+
+  return 0;
+}
+
+// Return the alternate feature for FeatureIndex within the given substitution table,
+// or Original if the table is null or has no entry for FeatureIndex.
+static kbts__feature *kbts__SubstituteFeature(kbts__feature_table_substitution *Table, kbts_un FeatureIndex, kbts__feature *Original)
+{
+  if(Table)
+  {
+    KBTS__FOR(SI, 0, Table->Count)
+    {
+      kbts__feature_substitution_pointer Sub = kbts__GetFeatureSubstitution(Table, SI);
+      if(Sub.SubstitutedFeatureIndex == FeatureIndex) return Sub.AlternateFeature;
+    }
+  }
+  return Original;
+}
+
 typedef struct kbts__iterate_features
 {
+  kbts_font *Font;
   kbts__gsub_gpos *Header;
   kbts__feature_list *FeatureList;
-  // @Incomplete
-  // kbts__feature_variations *FeatureVariations;
   kbts__langsys *Langsys;
+  kbts__feature_table_substitution *FeatureSubstitution;
 
   kbts__feature_set EnabledFeatures;
 
@@ -17093,16 +17952,12 @@ static kbts__iterate_features kbts__IterateFeatures(kbts_shape_config *Config, k
   kbts__gsub_gpos *Header = kbts__BlobTableDataType(Config->Font->Blob, TableId, kbts__gsub_gpos);
   if(Header)
   {
-    // @Incomplete
-    // if(Header->Minor == 1)
-    // {
-    //   Result.FeatureVariations = KBTS__POINTER_OFFSET(kbts__feature_variations, Header, Header->FeatureVariationsOffset);
-    // }
-
     Result.FeatureList = KBTS__POINTER_OFFSET(kbts__feature_list, Header, Header->FeatureListOffset);
     Result.Header = Header;
     Result.Langsys = Config->Langsys[ShapingTable];
     Result.EnabledFeatures = EnabledFeatures;
+    Result.Font = Config->Font;
+    Result.FeatureSubstitution = kbts__MatchFeatureSubstitution(Config->Font, Header);
   }
 
   return Result;
@@ -17122,27 +17977,14 @@ static kbts_b32 kbts__NextFeature(kbts__iterate_features *It)
   if(kbts__IsValidFeatureIteration(It))
   {
     kbts_u16 *FeatureIndices = KBTS__POINTER_AFTER(kbts_u16, It->Langsys);
-    // @Incomplete
-    // kbts__feature_variations *FeatureVariations = It->FeatureVariations;
     while(It->FeatureIndex < It->Langsys->FeatureIndexCount)
     {
-      kbts__feature_pointer Feature = kbts__GetFeature(It->FeatureList, FeatureIndices[It->FeatureIndex]);
+      kbts_un OriginalFeatureIndex = FeatureIndices[It->FeatureIndex];
+      kbts__feature_pointer Feature = kbts__GetFeature(It->FeatureList, OriginalFeatureIndex);
 
-      // We might need to swap out this feature with another.
-      // Check for variations.
-      // @Incomplete
-      //if(FeatureVariations)
-      //{
-      //  KBTS__FOR(VariationIndex, 0, FeatureVariations->RecordCount)
-      //  {
-      //    kbts__feature_variation_pointer Variation = kbts__GetFeatureVariation(FeatureVariations, VariationIndex);
-      //    KBTS__FOR(ConditionIndex, 0, Variation.ConditionSet->Count)
-      //    {
-      //      kbts__condition_1 *Condition = kbts__GetCondition(Variation.ConditionSet, ConditionIndex);
-      //      KBTS_ASSERT(0);
-      //    }
-      //  }
-      //}
+      // FeatureVariations may swap this feature for an alternate based on the
+      // font's currently-selected variation coords.
+      Feature.Feature = kbts__SubstituteFeature(It->FeatureSubstitution, OriginalFeatureIndex, Feature.Feature);
 
       It->FeatureIndex += 1;
 
@@ -18628,13 +19470,46 @@ static kbts__sequence_lookup_result kbts__DoSequenceLookup(kbts_glyph_storage *S
   return Result;
 }
 
-static void kbts__ApplyValueRecord(kbts_glyph *Glyph, kbts__unpacked_value_record *Unpacked)
+// Resolve a Device table that uses the OpenType "VariationIndex" delta format
+// (DeltaFormat == 0x8000): look up the (outer, inner) indices in the GDEF
+// ItemVariationStore against the font's current normalized variation coords.
+// Returns 0 for legacy delta-only Device tables (formats 1-3) and for fonts
+// without a GDEF IVS or fvar.
+static kbts_s32 kbts__ApplyGdefIvsToDevice(kbts_font *Font, kbts__device *Device)
 {
-  Glyph->OffsetX += Unpacked->PlacementX;
-  Glyph->OffsetY += Unpacked->PlacementY;
+  if(!Device) return 0;
+  if(Device->DeltaFormat != 0x8000) return 0;
+  if(!Font->HasNonDefaultVariation) return 0;
 
-  Glyph->AdvanceX += Unpacked->AdvanceX;
-  Glyph->AdvanceY += Unpacked->AdvanceY;
+  kbts__item_variation_store *Ivs = Font->GdefIvs;
+  kbts__fvar *Fvar = Font->Fvar;
+  if(!Ivs || !Fvar) return 0;
+
+  return kbts__IvsDelta(Ivs, Font->NormalizedCoords, Fvar->AxisCount,
+                        Device->U.VariationIndex.DeltaSetOuterIndex,
+                        Device->U.VariationIndex.DeltaSetInnerIndex);
+}
+
+static void kbts__ApplyValueRecord(kbts_font *Font, kbts_glyph *Glyph, kbts__unpacked_value_record *Unpacked)
+{
+  Glyph->OffsetX  += Unpacked->PlacementX + kbts__ApplyGdefIvsToDevice(Font, Unpacked->PlacementXDevice);
+  Glyph->OffsetY  += Unpacked->PlacementY + kbts__ApplyGdefIvsToDevice(Font, Unpacked->PlacementYDevice);
+  Glyph->AdvanceX += Unpacked->AdvanceX   + kbts__ApplyGdefIvsToDevice(Font, Unpacked->AdvanceXDevice);
+  Glyph->AdvanceY += Unpacked->AdvanceY   + kbts__ApplyGdefIvsToDevice(Font, Unpacked->AdvanceYDevice);
+}
+
+// Resolve the X/Y device tables on an Anchor (only present in Anchor Format 3).
+// Returns the GDEF IVS deltas to apply on top of the base Anchor X/Y.
+static kbts_s32 kbts__AnchorXDelta(kbts_font *Font, kbts__anchor *Anchor)
+{
+  if(!Anchor || (Anchor->Format != 3) || !Anchor->U.XDeviceOffset) return 0;
+  return kbts__ApplyGdefIvsToDevice(Font, KBTS__POINTER_OFFSET(kbts__device, Anchor, Anchor->U.XDeviceOffset));
+}
+
+static kbts_s32 kbts__AnchorYDelta(kbts_font *Font, kbts__anchor *Anchor)
+{
+  if(!Anchor || (Anchor->Format != 3) || !Anchor->YDeviceOffset) return 0;
+  return kbts__ApplyGdefIvsToDevice(Font, KBTS__POINTER_OFFSET(kbts__device, Anchor, Anchor->YDeviceOffset));
 }
 
 static kbts_b32 kbts__NextGlyph(kbts_glyph_storage *Storage, kbts__unpacked_lookup *Lookup, kbts_glyph *AtGlyph, kbts__skip_flags SkipFlags, kbts_u32 SkipUnicodeFlags, kbts_glyph **Match, int Backward)
@@ -18788,7 +19663,7 @@ static kbts_b32 kbts__DoSingleAdjustment(kbts_shape_scratchpad *Scratchpad, kbts
           Unpacked = kbts__UnpackValueRecord(Adjust, ValueFormat, Record);
         }
 
-        kbts__ApplyValueRecord(CurrentGlyph, &Unpacked);
+        kbts__ApplyValueRecord(Config->Font, CurrentGlyph, &Unpacked);
 
         CurrentGlyph->Flags |= KBTS_GLYPH_FLAG_USED_IN_GPOS;
 
@@ -18806,6 +19681,12 @@ static kbts_b32 kbts__DoSingleAdjustment(kbts_shape_scratchpad *Scratchpad, kbts
 
           kbts_u16 *Unpacked1Base;
           kbts_u16 *Unpacked2Base;
+          // Parent table for any Device offsets in the value records.
+          // For PairPosFormat1 this is the PairSet (per OT spec, offsets in the
+          // pair value records are relative to PairSet — matching kbts's existing
+          // byte-swap parent in kbts_ByteSwapValueRecord).
+          // For PairPosFormat2 it is the PairPos subtable.
+          void *DeviceParent = 0;
           kbts_u16 ValueFormat1;
           kbts_u16 ValueFormat2 = 0;
           kbts_un Size1;
@@ -18826,6 +19707,7 @@ static kbts_b32 kbts__DoSingleAdjustment(kbts_shape_scratchpad *Scratchpad, kbts
 
             kbts_u16 *SetOffsets = KBTS__POINTER_AFTER(kbts_u16, Adjust);
             kbts__pair_set *Set = KBTS__POINTER_OFFSET(kbts__pair_set, Adjust, SetOffsets[Cover.Index]);
+            DeviceParent = Set;
 
             kbts_un PairRecordSize = Size1 + Size2 + 1; // + 1 because each pair stores the next glyph ID.
             kbts__pair_value_record *PairRecords = KBTS__POINTER_AFTER(kbts__pair_value_record, Set);
@@ -18899,6 +19781,7 @@ static kbts_b32 kbts__DoSingleAdjustment(kbts_shape_scratchpad *Scratchpad, kbts
             KBTS_INSTRUMENT_BLOCK_BEGIN(PairClasses);
 
             kbts__pair_adjustment_2 *Adjust = (kbts__pair_adjustment_2 *)Base;
+            DeviceParent = Adjust;
             kbts_u16 *ClassDef1 = KBTS__POINTER_OFFSET(kbts_u16, Adjust, Adjust->ClassDefinition1Offset);
             kbts_u16 *ClassDef2 = KBTS__POINTER_OFFSET(kbts_u16, Adjust, Adjust->ClassDefinition2Offset);
 
@@ -18937,8 +19820,8 @@ static kbts_b32 kbts__DoSingleAdjustment(kbts_shape_scratchpad *Scratchpad, kbts
 
             KBTS_INSTRUMENT_BLOCK_BEGIN(ApplyPairPositioning);
 
-            kbts__unpacked_value_record Unpacked1 = kbts__UnpackValueRecord(Base, ValueFormat1, Unpacked1Base);
-            kbts__ApplyValueRecord(CurrentGlyph, &Unpacked1);
+            kbts__unpacked_value_record Unpacked1 = kbts__UnpackValueRecord(DeviceParent, ValueFormat1, Unpacked1Base);
+            kbts__ApplyValueRecord(Config->Font, CurrentGlyph, &Unpacked1);
 
             CurrentGlyph->Flags |= KBTS_GLYPH_FLAG_USED_IN_GPOS;
             NextGlyph->Flags |= KBTS_GLYPH_FLAG_USED_IN_GPOS;
@@ -18947,8 +19830,8 @@ static kbts_b32 kbts__DoSingleAdjustment(kbts_shape_scratchpad *Scratchpad, kbts
 
             if(ValueFormat2)
             {
-              kbts__unpacked_value_record Unpacked2 = kbts__UnpackValueRecord(Base, ValueFormat2, Unpacked2Base);
-              kbts__ApplyValueRecord(NextGlyph, &Unpacked2);
+              kbts__unpacked_value_record Unpacked2 = kbts__UnpackValueRecord(DeviceParent, ValueFormat2, Unpacked2Base);
+              kbts__ApplyValueRecord(Config->Font, NextGlyph, &Unpacked2);
               OnePastLastGlyph = NextGlyph->Next;
             }
 
@@ -18983,10 +19866,10 @@ static kbts_b32 kbts__DoSingleAdjustment(kbts_shape_scratchpad *Scratchpad, kbts
             {
               kbts__anchor *PrevExitAnchor = KBTS__POINTER_OFFSET(kbts__anchor, Adjust, PrevEntryExit->ExitAnchorOffset);
               kbts__anchor *EntryAnchor = KBTS__POINTER_OFFSET(kbts__anchor, Adjust, EntryExit->EntryAnchorOffset);
-              kbts_s32 Anchor0X = PrevExitAnchor->X;
-              kbts_s32 Anchor0Y = PrevExitAnchor->Y;
-              kbts_s32 Anchor1X = EntryAnchor->X;
-              kbts_s32 Anchor1Y = EntryAnchor->Y;
+              kbts_s32 Anchor0X = (kbts_s32)PrevExitAnchor->X + kbts__AnchorXDelta(Config->Font, PrevExitAnchor);
+              kbts_s32 Anchor0Y = (kbts_s32)PrevExitAnchor->Y + kbts__AnchorYDelta(Config->Font, PrevExitAnchor);
+              kbts_s32 Anchor1X = (kbts_s32)EntryAnchor->X    + kbts__AnchorXDelta(Config->Font, EntryAnchor);
+              kbts_s32 Anchor1Y = (kbts_s32)EntryAnchor->Y    + kbts__AnchorYDelta(Config->Font, EntryAnchor);
               kbts_s32 Advance0X = Prev->AdvanceX;
               kbts_s32 Advance1X = CurrentGlyph->AdvanceX;
               kbts_s32 Offset0X = Prev->OffsetX;
@@ -19232,8 +20115,12 @@ static kbts_b32 kbts__DoSingleAdjustment(kbts_shape_scratchpad *Scratchpad, kbts
                    both glyphs are not affected.
                 */
 
-                kbts_s32 NewOffsetX = BaseGlyph->OffsetX - AdvanceSinceBaseX + (BaseAnchor->X - MarkInfo.Anchor->X);
-                kbts_s32 NewOffsetY = BaseGlyph->OffsetY - AdvanceSinceBaseY + (BaseAnchor->Y - MarkInfo.Anchor->Y);
+                kbts_s32 BaseAX = (kbts_s32)BaseAnchor->X      + kbts__AnchorXDelta(Config->Font, BaseAnchor);
+                kbts_s32 BaseAY = (kbts_s32)BaseAnchor->Y      + kbts__AnchorYDelta(Config->Font, BaseAnchor);
+                kbts_s32 MarkAX = (kbts_s32)MarkInfo.Anchor->X + kbts__AnchorXDelta(Config->Font, MarkInfo.Anchor);
+                kbts_s32 MarkAY = (kbts_s32)MarkInfo.Anchor->Y + kbts__AnchorYDelta(Config->Font, MarkInfo.Anchor);
+                kbts_s32 NewOffsetX = BaseGlyph->OffsetX - AdvanceSinceBaseX + (BaseAX - MarkAX);
+                kbts_s32 NewOffsetY = BaseGlyph->OffsetY - AdvanceSinceBaseY + (BaseAY - MarkAY);
 
                 kbts__AttachGlyph(Storage, BaseGlyph, CurrentGlyph, NewOffsetX, NewOffsetY);
 
@@ -19303,8 +20190,12 @@ static kbts_b32 kbts__DoSingleAdjustment(kbts_shape_scratchpad *Scratchpad, kbts
 
               kbts__anchor *LigatureAnchor = kbts__GetLigatureAttachAnchor(Adjust, LigatureAttach, MarkInfo.Record->Class, AnchorIndex);
 
-              kbts_s32 NewOffsetX = LigatureGlyph->OffsetX - AdvanceSinceBaseX + (LigatureAnchor->X - MarkInfo.Anchor->X);
-              kbts_s32 NewOffsetY = LigatureGlyph->OffsetY - AdvanceSinceBaseY + (LigatureAnchor->Y - MarkInfo.Anchor->Y);
+              kbts_s32 LigatureAX = (kbts_s32)LigatureAnchor->X + kbts__AnchorXDelta(Config->Font, LigatureAnchor);
+              kbts_s32 LigatureAY = (kbts_s32)LigatureAnchor->Y + kbts__AnchorYDelta(Config->Font, LigatureAnchor);
+              kbts_s32 MarkAX     = (kbts_s32)MarkInfo.Anchor->X + kbts__AnchorXDelta(Config->Font, MarkInfo.Anchor);
+              kbts_s32 MarkAY     = (kbts_s32)MarkInfo.Anchor->Y + kbts__AnchorYDelta(Config->Font, MarkInfo.Anchor);
+              kbts_s32 NewOffsetX = LigatureGlyph->OffsetX - AdvanceSinceBaseX + (LigatureAX - MarkAX);
+              kbts_s32 NewOffsetY = LigatureGlyph->OffsetY - AdvanceSinceBaseY + (LigatureAY - MarkAY);
 
               kbts__AttachGlyph(Storage, LigatureGlyph, CurrentGlyph, NewOffsetX, NewOffsetY);
 
@@ -21244,14 +22135,20 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
             // :LeftSideBearing
             // Why does harfbuzz not take bearings into account in these tests?
             // P.X += Metric.PreviousSideBearing;
-            Glyph->AdvanceX = Metric.Advance;
+            kbts_s32 Advance = (kbts_s32)Metric.Advance;
+            Advance += kbts__ApplyHvarAdvanceDelta(Font, Glyph->Id);
+            if(Advance < 0) Advance = 0;
+            Glyph->AdvanceX = Advance;
           }
           else
           {
             // :LeftSideBearing
             // Why does harfbuzz not take bearings into account in these tests?
             // P.Y += Metric.PreviousSideBearing;
-            Glyph->AdvanceY = Metric.Advance;
+            kbts_s32 Advance = (kbts_s32)Metric.Advance;
+            Advance += kbts__ApplyVvarAdvanceDelta(Font, Glyph->Id);
+            if(Advance < 0) Advance = 0;
+            Glyph->AdvanceY = Advance;
           }
         }
       }
@@ -23364,12 +24261,14 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
             {
               kbts__feature_list *FeatureList = KBTS__POINTER_OFFSET(kbts__feature_list, GsubGpos, GsubGpos->FeatureListOffset);
               kbts_u16 *FeatureIndices = KBTS__POINTER_AFTER(kbts_u16, Langsys);
+              kbts__feature_table_substitution *FeatureSubstitution = kbts__MatchFeatureSubstitution(Font, GsubGpos);
 
               // @Speed: Maybe we don't care about fragmentation and we just allocate Langsys->FeatureIndexCount in advance?
               KBTS__FOR(FeatureIndexIndex, 0, Langsys->FeatureIndexCount)
               {
                 kbts_un FeatureIndex = FeatureIndices[FeatureIndexIndex];
                 kbts__feature_pointer Feature = kbts__GetFeature(FeatureList, FeatureIndex);
+                Feature.Feature = kbts__SubstituteFeature(FeatureSubstitution, FeatureIndex, Feature.Feature);
 
                 kbts_u32 FeatureId = kbts__FeatureTagToId(Feature.Tag);
 
@@ -23393,6 +24292,7 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
               {
                 kbts_un FeatureIndex = FeatureIndices[FeatureIndexIndex];
                 kbts__feature_pointer Feature = kbts__GetFeature(FeatureList, FeatureIndex);
+                Feature.Feature = kbts__SubstituteFeature(FeatureSubstitution, FeatureIndex, Feature.Feature);
 
                 kbts_u32 FeatureId = kbts__FeatureTagToId(Feature.Tag);
                 // We add all features indiscriminately for ops that might incorporate user features.
@@ -23414,20 +24314,6 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
                   BakedFeature.Count = Feature.Feature->LookupIndexCount;
                   // These point directly into the file.
                   BakedFeature.Indices = KBTS__POINTER_AFTER(kbts_u16, Feature.Feature);
-
-                  // @Incomplete
-                  //if(FeatureVariations)
-                  //{
-                  //  KBTS__FOR(VariationIndex, 0, FeatureVariations->RecordCount)
-                  //  {
-                  //    kbts__feature_variation_pointer Variation = kbts__GetFeatureVariation(FeatureVariations, VariationIndex);
-                  //    KBTS__FOR(ConditionIndex, 0, Variation.ConditionSet->Count)
-                  //    {
-                  //      kbts__condition_1 *Condition = kbts__GetCondition(Variation.ConditionSet, ConditionIndex);
-                  //      KBTS_ASSERT(0);
-                  //    }
-                  //  }
-                  //}
 
                   // For Myanmar, we could try and tag glyphs depending on their Indic properties in BeginCluster, just like we do for
                   // Indic scripts.
@@ -25474,6 +26360,11 @@ KBTS_EXPORT kbts_load_font_error kbts_LoadFont(kbts_font *Font, kbts_load_font_s
             case KBTS_FOURCC('m', 'a', 'x', 'p'): TableId = KBTS_BLOB_TABLE_ID_MAXP; break;
             case KBTS_FOURCC('O', 'S', '/', '2'): TableId = KBTS_BLOB_TABLE_ID_OS2;  break;
             case KBTS_FOURCC('n', 'a', 'm', 'e'): TableId = KBTS_BLOB_TABLE_ID_NAME; break;
+            case KBTS_FOURCC('f', 'v', 'a', 'r'): TableId = KBTS_BLOB_TABLE_ID_FVAR; break;
+            case KBTS_FOURCC('a', 'v', 'a', 'r'): TableId = KBTS_BLOB_TABLE_ID_AVAR; break;
+            case KBTS_FOURCC('H', 'V', 'A', 'R'): TableId = KBTS_BLOB_TABLE_ID_HVAR; break;
+            case KBTS_FOURCC('V', 'V', 'A', 'R'): TableId = KBTS_BLOB_TABLE_ID_VVAR; break;
+            case KBTS_FOURCC('M', 'V', 'A', 'R'): TableId = KBTS_BLOB_TABLE_ID_MVAR; break;
             }
 
             if(TableId)
@@ -25599,6 +26490,139 @@ KBTS_EXPORT int kbts_FontIsValid(kbts_font *Font)
 {
   int Result = !Font->Error;
   return Result;
+}
+
+KBTS_EXPORT int kbts_FontIsVariable(kbts_font *Font)
+{
+  int Result = 0;
+  if(Font && kbts_FontIsValid(Font) && Font->Blob)
+  {
+    Result = (Font->Blob->Tables[KBTS_BLOB_TABLE_ID_FVAR].Length != 0);
+  }
+  return Result;
+}
+
+KBTS_EXPORT kbts_u32 kbts_FontVariationAxisCount(kbts_font *Font)
+{
+  kbts__fvar *Fvar = kbts__GetFvar(Font);
+  return Fvar ? (kbts_u32)Fvar->AxisCount : 0;
+}
+
+KBTS_EXPORT void kbts_GetFontVariationAxis(kbts_font *Font, kbts_u32 Index, kbts_axis_info *Out)
+{
+  if(!Out) return;
+  Out->Tag = 0;
+  Out->MinValue = 0;
+  Out->DefaultValue = 0;
+  Out->MaxValue = 0;
+  Out->NameId = 0;
+  Out->Flags = 0;
+
+  kbts__variation_axis_record *Axis = kbts__GetVariationAxis(kbts__GetFvar(Font), Index);
+  if(Axis)
+  {
+    Out->Tag          = Axis->Tag;
+    Out->MinValue     = Axis->MinValue;
+    Out->DefaultValue = Axis->DefaultValue;
+    Out->MaxValue     = Axis->MaxValue;
+    Out->NameId       = Axis->AxisNameId;
+    Out->Flags        = (Axis->Flags & 0x1) ? KBTS_AXIS_FLAG_HIDDEN : 0;
+  }
+}
+
+KBTS_EXPORT kbts_u32 kbts_FontVariationInstanceCount(kbts_font *Font)
+{
+  kbts__fvar *Fvar = kbts__GetFvar(Font);
+  return Fvar ? (kbts_u32)Fvar->InstanceCount : 0;
+}
+
+KBTS_EXPORT void kbts_GetFontVariationInstance(kbts_font *Font, kbts_u32 Index, kbts_instance_info *OutInfo,
+                                               kbts_s32 *OutCoords, kbts_u32 OutCoordsCapacity)
+{
+  if(OutInfo)
+  {
+    OutInfo->SubfamilyNameId  = 0;
+    OutInfo->PostScriptNameId = 0;
+  }
+
+  kbts__fvar *Fvar = kbts__GetFvar(Font);
+  kbts__instance_record_header *Inst = kbts__GetInstanceRecord(Fvar, Index);
+  if(!Inst) return;
+
+  if(OutInfo)
+  {
+    OutInfo->SubfamilyNameId = Inst->SubfamilyNameId;
+    // PostScript name id is the optional u16 immediately after the coords array.
+    kbts_un MinSize = 4u + 4u * (kbts_un)Fvar->AxisCount;
+    if(Fvar->InstanceSize >= MinSize + 2u)
+    {
+      kbts_u16 *PsNameId = (kbts_u16 *)((kbts_u8 *)(Inst + 1) + 4u * (kbts_un)Fvar->AxisCount);
+      OutInfo->PostScriptNameId = *PsNameId;
+    }
+  }
+
+  if(OutCoords)
+  {
+    kbts_s32 *Src = kbts__GetInstanceCoords(Inst);
+    kbts_un Limit = (OutCoordsCapacity < (kbts_un)Fvar->AxisCount) ? OutCoordsCapacity : (kbts_un)Fvar->AxisCount;
+    KBTS__FOR(I, 0, Limit) OutCoords[I] = Src[I];
+  }
+}
+
+KBTS_EXPORT void kbts_SetFontVariations(kbts_font *Font, kbts_axis_value *Values, kbts_u32 ValueCount)
+{
+  if(!Font || !kbts_FontIsValid(Font)) return;
+
+  KBTS__FOR(I, 0, KBTS_MAX_VARIATION_AXES) Font->NormalizedCoords[I] = 0;
+  Font->HasNonDefaultVariation = 0;
+  Font->EffectiveWeight = KBTS_FONT_WEIGHT_UNKNOWN;
+  Font->EffectiveWidth  = KBTS_FONT_WIDTH_UNKNOWN;
+  Font->EffectiveItalic = 0;
+  Font->EffectiveItalicValid = 0;
+
+  kbts__fvar *Fvar = kbts__GetFvar(Font);
+  if(!Fvar || (Fvar->AxisCount > KBTS_MAX_VARIATION_AXES) || !ValueCount) return;
+
+  kbts__avar *Avar = kbts__GetAvar(Font);
+
+  // Track caller-supplied wght/wdth/ital/slnt values so kbts_GetFontInfo2 can
+  // report a sensible Weight/Width/StyleFlags for the current selection.
+  kbts_s32 ItalUser = 0, SlntUser = 0;
+  kbts_b32 HaveItal = 0, HaveSlnt = 0;
+
+  KBTS__FOR(VI, 0, ValueCount)
+  {
+    kbts_u32 Tag = Values[VI].Tag;
+    kbts_s32 V = Values[VI].Value;
+
+    KBTS__FOR(AI, 0, Fvar->AxisCount)
+    {
+      kbts__variation_axis_record *Axis = kbts__GetVariationAxis(Fvar, AI);
+      if(Axis->Tag == Tag)
+      {
+        Font->NormalizedCoords[AI] = kbts__NormalizeAxisValue(Axis, kbts__GetAvarSegmentMap(Avar, AI), V);
+        break;
+      }
+    }
+
+    if(Tag == KBTS_FOURCC('w','g','h','t'))      Font->EffectiveWeight = kbts__WeightFromFixed(V);
+    else if(Tag == KBTS_FOURCC('w','d','t','h')) Font->EffectiveWidth  = kbts__WidthFromFixed(V);
+    else if(Tag == KBTS_FOURCC('i','t','a','l')) { HaveItal = 1; ItalUser = V; }
+    else if(Tag == KBTS_FOURCC('s','l','n','t')) { HaveSlnt = 1; SlntUser = V; }
+  }
+
+  KBTS__FOR(AI, 0, Fvar->AxisCount)
+  {
+    if(Font->NormalizedCoords[AI] != 0) { Font->HasNonDefaultVariation = 1; break; }
+  }
+
+  if(HaveItal || HaveSlnt)
+  {
+    Font->EffectiveItalicValid = 1;
+    // ital == 1.0 is italic; for slnt, anything <= -5 degrees counts as italic.
+    if(HaveItal && (ItalUser >= ((kbts_s32)1 << 15))) Font->EffectiveItalic = 1;
+    if(HaveSlnt && (SlntUser <= -((kbts_s32)5 << 16))) Font->EffectiveItalic = 1;
+  }
 }
 
 static void kbts__MarkMatrixCoverage(kbts_u32 *Matrix, kbts_un TableIndex, kbts_un TableCount, kbts_un GlyphCount, kbts__coverage *Coverage, int SubtableMatrix)
@@ -25937,8 +26961,12 @@ KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_
               {
                 if(GdefTable->Length >= sizeof(kbts__gdef))
                 {
-                  // @Incomplete
                   Gdef->ItemVariationStoreOffset = kbts__ByteSwap32(Gdef->ItemVariationStoreOffset);
+                  if(Gdef->ItemVariationStoreOffset)
+                  {
+                    kbts__item_variation_store *Ivs = KBTS__POINTER_OFFSET(kbts__item_variation_store, Gdef, Gdef->ItemVariationStoreOffset);
+                    kbts__ByteSwapItemVariationStore(Ivs, TableEnd);
+                  }
                 }
                 else
                 {
@@ -26118,6 +27146,213 @@ KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_
       }
       // We should normally set Result to INVALID_FONT if there is no name table.
       // However, one Harfbuzz test has a font with no name table.
+    }
+
+    {
+      kbts_blob_table *FvarTable = &Header->Tables[KBTS_BLOB_TABLE_ID_FVAR];
+
+      if(FvarTable->Length)
+      {
+        if(FvarTable->Length >= sizeof(kbts__fvar))
+        {
+          kbts__fvar *Fvar = KBTS__POINTER_OFFSET(kbts__fvar, Header, FvarTable->OffsetFromStartOfFile);
+          char *TableEnd = KBTS__POINTER_OFFSET(char, Fvar, FvarTable->Length);
+
+          kbts__ByteSwapArray16Unchecked(&Fvar->Major, 8);
+
+          // Sanity-check the layout against the table size before walking arrays.
+          kbts_un AxisStart = Fvar->AxesArrayOffset;
+          kbts_un AxisBytes = (kbts_un)Fvar->AxisCount * Fvar->AxisSize;
+          kbts_un InstanceStart = AxisStart + AxisBytes;
+          kbts_un InstanceBytes = (kbts_un)Fvar->InstanceCount * Fvar->InstanceSize;
+          kbts_un MinPerInstance = 4u + 4u * (kbts_un)Fvar->AxisCount; // SubfamilyNameId+Flags + AxisCount*Fixed
+
+          if((Fvar->Major == 1) &&
+             (Fvar->AxesArrayOffset >= sizeof(kbts__fvar)) &&
+             (Fvar->AxisSize >= sizeof(kbts__variation_axis_record)) &&
+             (Fvar->InstanceSize >= MinPerInstance) &&
+             (AxisStart + AxisBytes <= FvarTable->Length) &&
+             (InstanceStart + InstanceBytes <= FvarTable->Length))
+          {
+            kbts_u8 *AxisCursor = KBTS__POINTER_OFFSET(kbts_u8, Fvar, AxisStart);
+            KBTS__FOR(AxisIndex, 0, Fvar->AxisCount)
+            {
+              kbts__variation_axis_record *Axis = (kbts__variation_axis_record *)(AxisCursor + AxisIndex * Fvar->AxisSize);
+              // Tag is left in disk byte order so it compares directly with KBTS_FOURCC().
+              kbts__ByteSwapArray32Unchecked((kbts_u32 *)&Axis->MinValue, 3);
+              kbts__ByteSwapArray16Unchecked(&Axis->Flags, 2);
+            }
+
+            kbts_u8 *InstanceCursor = KBTS__POINTER_OFFSET(kbts_u8, Fvar, InstanceStart);
+            KBTS__FOR(InstanceIndex, 0, Fvar->InstanceCount)
+            {
+              kbts__instance_record_header *Inst = (kbts__instance_record_header *)(InstanceCursor + InstanceIndex * Fvar->InstanceSize);
+              kbts__ByteSwapArray16Unchecked(&Inst->SubfamilyNameId, 2);
+              kbts__ByteSwapArray32Unchecked((kbts_u32 *)(Inst + 1), Fvar->AxisCount);
+
+              if(Fvar->InstanceSize >= MinPerInstance + 2u)
+              {
+                kbts_u16 *PsNameId = (kbts_u16 *)((kbts_u8 *)(Inst + 1) + 4u * Fvar->AxisCount);
+                *PsNameId = kbts__ByteSwap16(*PsNameId);
+              }
+            }
+          }
+          else
+          {
+            Result = KBTS_LOAD_FONT_ERROR_INVALID_FONT;
+          }
+        }
+        else
+        {
+          Result = KBTS_LOAD_FONT_ERROR_INVALID_FONT;
+        }
+      }
+    }
+
+    {
+      kbts_blob_table *AvarTable = &Header->Tables[KBTS_BLOB_TABLE_ID_AVAR];
+
+      if(AvarTable->Length)
+      {
+        if(AvarTable->Length >= sizeof(kbts__avar))
+        {
+          kbts__avar *Avar = KBTS__POINTER_OFFSET(kbts__avar, Header, AvarTable->OffsetFromStartOfFile);
+          char *TableEnd = KBTS__POINTER_OFFSET(char, Avar, AvarTable->Length);
+
+          kbts__ByteSwapArray16Unchecked(&Avar->Major, 4);
+
+          if(Avar->Major == 1)
+          {
+            kbts_u8 *Cursor = (kbts_u8 *)(Avar + 1);
+            KBTS__FOR(AxisIndex, 0, Avar->AxisCount)
+            {
+              if(Cursor + sizeof(kbts__avar_segment_map) > (kbts_u8 *)TableEnd)
+              {
+                Result = KBTS_LOAD_FONT_ERROR_INVALID_FONT;
+                break;
+              }
+              kbts__avar_segment_map *Map = (kbts__avar_segment_map *)Cursor;
+              Map->PositionMapCount = kbts__ByteSwap16(Map->PositionMapCount);
+              Cursor += sizeof(kbts__avar_segment_map);
+
+              kbts_un U16Count = (kbts_un)Map->PositionMapCount * 2;
+              if(Cursor + U16Count * sizeof(kbts_u16) > (kbts_u8 *)TableEnd)
+              {
+                Result = KBTS_LOAD_FONT_ERROR_INVALID_FONT;
+                break;
+              }
+              kbts__ByteSwapArray16Unchecked((kbts_u16 *)Cursor, U16Count);
+              Cursor += U16Count * sizeof(kbts_u16);
+            }
+          }
+          else
+          {
+            Result = KBTS_LOAD_FONT_ERROR_INVALID_FONT;
+          }
+        }
+        else
+        {
+          Result = KBTS_LOAD_FONT_ERROR_INVALID_FONT;
+        }
+      }
+    }
+
+    {
+      kbts_blob_table *HvarTable = &Header->Tables[KBTS_BLOB_TABLE_ID_HVAR];
+      if(HvarTable->Length >= sizeof(kbts__hvar))
+      {
+        kbts__hvar *Hvar = KBTS__POINTER_OFFSET(kbts__hvar, Header, HvarTable->OffsetFromStartOfFile);
+        char *TableEnd = KBTS__POINTER_OFFSET(char, Hvar, HvarTable->Length);
+
+        kbts__ByteSwapArray16Unchecked(&Hvar->Major, 2);
+        kbts__ByteSwapArray32Unchecked(&Hvar->ItemVariationStoreOffset, 4);
+
+        if((Hvar->Major == 1) &&
+           (Hvar->ItemVariationStoreOffset >= sizeof(kbts__hvar)))
+        {
+          kbts__item_variation_store *Ivs = KBTS__POINTER_OFFSET(kbts__item_variation_store, Hvar, Hvar->ItemVariationStoreOffset);
+          kbts__ByteSwapItemVariationStore(Ivs, TableEnd);
+        }
+
+        kbts_u32 MappingOffsets[3] = {
+          Hvar->AdvanceWidthMappingOffset,
+          Hvar->LsbMappingOffset,
+          Hvar->RsbMappingOffset,
+        };
+        KBTS__FOR(MapIndex, 0, 3)
+        {
+          if(MappingOffsets[MapIndex] && (MappingOffsets[MapIndex] < HvarTable->Length))
+          {
+            kbts__ByteSwapDeltaSetIndexMapHeader((kbts_u8 *)Hvar + MappingOffsets[MapIndex],
+                                                 HvarTable->Length - MappingOffsets[MapIndex]);
+          }
+        }
+      }
+    }
+
+    {
+      kbts_blob_table *VvarTable = &Header->Tables[KBTS_BLOB_TABLE_ID_VVAR];
+      if(VvarTable->Length >= sizeof(kbts__vvar))
+      {
+        kbts__vvar *Vvar = KBTS__POINTER_OFFSET(kbts__vvar, Header, VvarTable->OffsetFromStartOfFile);
+        char *TableEnd = KBTS__POINTER_OFFSET(char, Vvar, VvarTable->Length);
+
+        kbts__ByteSwapArray16Unchecked(&Vvar->Major, 2);
+        kbts__ByteSwapArray32Unchecked(&Vvar->ItemVariationStoreOffset, 5);
+
+        if((Vvar->Major == 1) &&
+           (Vvar->ItemVariationStoreOffset >= sizeof(kbts__vvar)))
+        {
+          kbts__item_variation_store *Ivs = KBTS__POINTER_OFFSET(kbts__item_variation_store, Vvar, Vvar->ItemVariationStoreOffset);
+          kbts__ByteSwapItemVariationStore(Ivs, TableEnd);
+        }
+
+        kbts_u32 MappingOffsets[4] = {
+          Vvar->AdvanceHeightMappingOffset,
+          Vvar->TopSideBearingMappingOffset,
+          Vvar->BottomSideBearingMappingOffset,
+          Vvar->VerticalOriginMappingOffset,
+        };
+        KBTS__FOR(MapIndex, 0, 4)
+        {
+          if(MappingOffsets[MapIndex] && (MappingOffsets[MapIndex] < VvarTable->Length))
+          {
+            kbts__ByteSwapDeltaSetIndexMapHeader((kbts_u8 *)Vvar + MappingOffsets[MapIndex],
+                                                 VvarTable->Length - MappingOffsets[MapIndex]);
+          }
+        }
+      }
+    }
+
+    {
+      kbts_blob_table *MvarTable = &Header->Tables[KBTS_BLOB_TABLE_ID_MVAR];
+      if(MvarTable->Length >= sizeof(kbts__mvar))
+      {
+        kbts__mvar *Mvar = KBTS__POINTER_OFFSET(kbts__mvar, Header, MvarTable->OffsetFromStartOfFile);
+        char *TableEnd = KBTS__POINTER_OFFSET(char, Mvar, MvarTable->Length);
+
+        kbts__ByteSwapArray16Unchecked(&Mvar->Major, 6);
+
+        if(Mvar->Major == 1)
+        {
+          // Byte-swap value records (Tag (u32), OuterIndex (u16), InnerIndex (u16) per spec).
+          kbts__mvar_value_record *Records = KBTS__POINTER_AFTER(kbts__mvar_value_record, Mvar);
+          if((char *)(Records + Mvar->ValueRecordCount) <= TableEnd)
+          {
+            KBTS__FOR(I, 0, Mvar->ValueRecordCount)
+            {
+              // Tag stays in disk byte order (compare with KBTS_FOURCC).
+              kbts__ByteSwapArray16Unchecked(&Records[I].DeltaSetOuterIndex, 2);
+            }
+          }
+
+          if(Mvar->ItemVariationStoreOffset)
+          {
+            kbts__item_variation_store *Ivs = KBTS__POINTER_OFFSET(kbts__item_variation_store, Mvar, Mvar->ItemVariationStoreOffset);
+            kbts__ByteSwapItemVariationStore(Ivs, TableEnd);
+          }
+        }
+      }
     }
 
     kbts__byteswap_context ByteSwapContext = KBTS__ZERO;
@@ -26584,6 +27819,32 @@ KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_
   {
     Font->Blob = 0;
   }
+  else
+  {
+    Font->Fvar = kbts__BlobTableDataType(Font->Blob, KBTS_BLOB_TABLE_ID_FVAR, kbts__fvar);
+    Font->Avar = kbts__BlobTableDataType(Font->Blob, KBTS_BLOB_TABLE_ID_AVAR, kbts__avar);
+    Font->Hvar = kbts__BlobTableDataType(Font->Blob, KBTS_BLOB_TABLE_ID_HVAR, kbts__hvar);
+    Font->Vvar = kbts__BlobTableDataType(Font->Blob, KBTS_BLOB_TABLE_ID_VVAR, kbts__vvar);
+    Font->Mvar = kbts__BlobTableDataType(Font->Blob, KBTS_BLOB_TABLE_ID_MVAR, kbts__mvar);
+
+    kbts__gdef *Gdef = kbts__BlobTableDataType(Font->Blob, KBTS_BLOB_TABLE_ID_GDEF, kbts__gdef);
+    if(Gdef && (Gdef->Minor >= 3) && Gdef->ItemVariationStoreOffset)
+    {
+      Font->GdefIvs = KBTS__POINTER_OFFSET(kbts__item_variation_store, Gdef, Gdef->ItemVariationStoreOffset);
+    }
+
+    // Start a freshly loaded variable font at its default instance.
+    // NormalizedCoords lives in the kbts_font struct and is otherwise only ever
+    // initialized by kbts_SetFontVariations, so a font shaped before the first
+    // SetFontVariations call would weight its variation deltas by uninitialized
+    // coordinates. Zero them here (default == no variation).
+    KBTS__FOR(I, 0, KBTS_MAX_VARIATION_AXES) Font->NormalizedCoords[I] = 0;
+    Font->HasNonDefaultVariation = 0;
+    Font->EffectiveWeight = KBTS_FONT_WEIGHT_UNKNOWN;
+    Font->EffectiveWidth = KBTS_FONT_WIDTH_UNKNOWN;
+    Font->EffectiveItalic = 0;
+    Font->EffectiveItalicValid = 0;
+  }
   Font->Error = Result;
 
   return Result;
@@ -26615,7 +27876,7 @@ KBTS_EXPORT void kbts_GetFontInfo2(kbts_font *Font, kbts_font_info2 *Info)
 
         if(Os2)
         {
-          Info2_2->CapitalHeight = Os2->CapHeight;
+          Info2_2->CapitalHeight = (kbts_s16)((kbts_s32)Os2->CapHeight + kbts__ApplyMvarDelta(Font, KBTS_FOURCC('c','p','h','t')));
         }
       }
       KBTS__FALLTHROUGH;
@@ -26626,15 +27887,15 @@ KBTS_EXPORT void kbts_GetFontInfo2(kbts_font *Font, kbts_font_info2 *Info)
 
         if(Os2)
         {
-          Info2_1->Ascent = Os2->TypoAscender;
-          Info2_1->Descent = Os2->TypoDescender;
-          Info2_1->LineGap = Os2->TypoLineGap;
+          Info2_1->Ascent  = (kbts_s16)((kbts_s32)Os2->TypoAscender  + kbts__ApplyMvarDelta(Font, KBTS_FOURCC('h','a','s','c')));
+          Info2_1->Descent = (kbts_s16)((kbts_s32)Os2->TypoDescender + kbts__ApplyMvarDelta(Font, KBTS_FOURCC('h','d','s','c')));
+          Info2_1->LineGap = (kbts_s16)((kbts_s32)Os2->TypoLineGap   + kbts__ApplyMvarDelta(Font, KBTS_FOURCC('h','l','g','p')));
         }
         else if(Hhea)
         {
-          Info2_1->Ascent = Hhea->Ascent;
-          Info2_1->Descent = Hhea->Descent;
-          Info2_1->LineGap = Hhea->LineGap;
+          Info2_1->Ascent  = (kbts_s16)((kbts_s32)Hhea->Ascent  + kbts__ApplyMvarDelta(Font, KBTS_FOURCC('h','a','s','c')));
+          Info2_1->Descent = (kbts_s16)((kbts_s32)Hhea->Descent + kbts__ApplyMvarDelta(Font, KBTS_FOURCC('h','d','s','c')));
+          Info2_1->LineGap = (kbts_s16)((kbts_s32)Hhea->LineGap + kbts__ApplyMvarDelta(Font, KBTS_FOURCC('h','l','g','p')));
         }
 
         if(Head)
@@ -26749,6 +28010,29 @@ KBTS_EXPORT void kbts_GetFontInfo2(kbts_font *Font, kbts_font_info2 *Info)
           Info->Weight = Weight;
           Info->Width = Width;
           Info->StyleFlags = StyleFlags;
+        }
+
+        // Per-field overrides from the current variation selection.
+        if(Font->EffectiveWeight != KBTS_FONT_WEIGHT_UNKNOWN) Info->Weight = Font->EffectiveWeight;
+        if(Font->EffectiveWidth  != KBTS_FONT_WIDTH_UNKNOWN)  Info->Width  = Font->EffectiveWidth;
+
+        if(Font->EffectiveItalicValid)
+        {
+          if(Font->EffectiveItalic) Info->StyleFlags |= KBTS_FONT_STYLE_FLAG_ITALIC;
+          else                      Info->StyleFlags &= ~KBTS_FONT_STYLE_FLAG_ITALIC;
+        }
+        if(Font->EffectiveWeight != KBTS_FONT_WEIGHT_UNKNOWN)
+        {
+          if(Font->EffectiveWeight >= KBTS_FONT_WEIGHT_BOLD) Info->StyleFlags |= KBTS_FONT_STYLE_FLAG_BOLD;
+          else                                               Info->StyleFlags &= ~KBTS_FONT_STYLE_FLAG_BOLD;
+        }
+        // KBTS_FONT_STYLE_FLAG_REGULAR follows OS/2's lead and stays as-is unless
+        // overridden by an explicit upright Normal/Normal selection.
+        if((Font->EffectiveWeight == KBTS_FONT_WEIGHT_NORMAL) &&
+           (Font->EffectiveWidth  == KBTS_FONT_WIDTH_NORMAL) &&
+           (!Font->EffectiveItalicValid || !Font->EffectiveItalic))
+        {
+          Info->StyleFlags |= KBTS_FONT_STYLE_FLAG_REGULAR;
         }
       } break;
       }
