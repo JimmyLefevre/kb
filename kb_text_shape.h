@@ -13483,6 +13483,7 @@ typedef struct kbts__context_font
 
 typedef struct kbts__existing_glyph_config
 {
+  kbts_shape_config *ShapeConfig;
   kbts_feature_override *FeatureOverrides;
   int FeatureOverrideCount;
   kbts_glyph_config *GlyphConfig;
@@ -25051,8 +25052,22 @@ static kbts_glyph_config *kbts__FindOrCreateGlyphConfig(kbts_shape_context *Cont
       {
         kbts__existing_glyph_config *Existing = &ExistingBlock->Items[ExistingIndex];
 
-        if((Existing->FeatureOverrides == FeatureOverrides) &&
-           (Existing->FeatureOverrideCount == FeatureOverrideCount))
+        kbts_b32 Match = (Existing->ShapeConfig == ShapeConfig) &&
+                         (Existing->FeatureOverrideCount == FeatureOverrideCount);
+        if(Match)
+        {
+          KBTS__FOR(MatchIndex, 0, (kbts_un)FeatureOverrideCount)
+          {
+            if((Existing->FeatureOverrides[MatchIndex].Tag != FeatureOverrides[MatchIndex].Tag) ||
+               (Existing->FeatureOverrides[MatchIndex].Value != FeatureOverrides[MatchIndex].Value))
+            {
+              Match = 0;
+              break;
+            }
+          }
+        }
+
+        if(Match)
         {
           Result = Existing->GlyphConfig;
 
@@ -25083,9 +25098,27 @@ static kbts_glyph_config *kbts__FindOrCreateGlyphConfig(kbts_shape_context *Cont
 
       Result = kbts_CreateGlyphConfig(ShapeConfig, FeatureOverrides, FeatureOverrideCount, kbts__ArenaAllocator, &Context->ConfigArena);
 
+      // The incoming FeatureOverrides live in ScratchArena, which is cleared on
+      // every ShapeBegin, so the same address is reused across shaping runs with
+      // different contents. Copy them into the persistent ConfigArena that backs
+      // this cache, otherwise the pointer-and-count key collides and a later run
+      // gets an earlier run's glyph config.
+      kbts_feature_override *OverridesCopy = kbts__PushArray(&Context->ConfigArena, kbts_feature_override, FeatureOverrideCount);
+      if(!OverridesCopy)
+      {
+        Context->Error = KBTS_SHAPE_ERROR_OUT_OF_MEMORY;
+
+        return 0;
+      }
+      KBTS__FOR(CopyIndex, 0, (kbts_un)FeatureOverrideCount)
+      {
+        OverridesCopy[CopyIndex] = FeatureOverrides[CopyIndex];
+      }
+
       KBTS_ASSERT(Last->Count < KBTS__EXISTING_GLYPH_CONFIGS_PER_BLOCK);
       kbts__existing_glyph_config *Existing = &Last->Items[Last->Count++];
-      Existing->FeatureOverrides = FeatureOverrides;
+      Existing->ShapeConfig = ShapeConfig;
+      Existing->FeatureOverrides = OverridesCopy;
       Existing->FeatureOverrideCount = FeatureOverrideCount;
       Existing->GlyphConfig = Result;
     }
