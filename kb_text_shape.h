@@ -3638,7 +3638,7 @@ typedef struct kbts_glyph_classes
 
 
 typedef struct kbts__bucketed_glyph kbts__bucketed_glyph;
-typedef struct kbts_glyph
+struct kbts_glyph
 {
   kbts_glyph *Prev;
   kbts_glyph *Next;
@@ -3714,7 +3714,7 @@ typedef struct kbts_glyph
   kbts_u8 CombiningClass;
 
   kbts_u8 MarkOrdering; // Only used temporarily in NORMALIZE for Arabic mark reordering.
-} kbts_glyph;
+};
 
 typedef struct kbts_shape_codepoint
 {
@@ -3772,7 +3772,7 @@ typedef struct kbts_arena
   int Error;
 } kbts_arena;
 
-typedef struct kbts_glyph_storage
+struct kbts_glyph_storage
 {
   kbts_arena Arena;
 
@@ -3780,7 +3780,7 @@ typedef struct kbts_glyph_storage
   kbts_glyph FreeGlyphSentinel;
 
   int Error;
-} kbts_glyph_storage;
+};
 
 typedef struct kbts_glyph_parent
 {
@@ -13340,7 +13340,7 @@ typedef struct kbts__enabled_lookup
   kbts_u16 Value;
 } kbts__enabled_lookup;
 
-typedef struct kbts_glyph_config
+struct kbts_glyph_config
 {
   kbts_allocator_function *Allocator;
   void *AllocatorData;
@@ -13350,7 +13350,7 @@ typedef struct kbts_glyph_config
 
   kbts__enabled_lookup *NonBinaryEnabledLookups;
   kbts_u32 NonBinaryEnabledLookupCount;
-} kbts_glyph_config;
+};
 
 typedef struct kbts__arena_block
 {
@@ -13388,12 +13388,12 @@ typedef struct kbts__baked_feature
   kbts_u32 GlyphFilter;
 } kbts__baked_feature;
 
-typedef struct kbts__bucketed_glyph
+struct kbts__bucketed_glyph
 {
   kbts_glyph *Glyph;
   kbts_u32 SortKey;
   kbts_u16 FeatureValue;
-} kbts__bucketed_glyph;
+};
 
 typedef struct kbts__bucketed_glyph_block_header
 {
@@ -13410,7 +13410,7 @@ typedef struct kbts__bucketed_glyph_block
 } kbts__bucketed_glyph_block;
 
 #define KBTS_MAX_SIMULTANEOUS_FEATURES 32
-typedef struct kbts_shape_scratchpad
+struct kbts_shape_scratchpad
 {
   kbts_allocator_function *Allocator;
   void *AllocatorData;
@@ -13450,7 +13450,7 @@ typedef struct kbts_shape_scratchpad
   kbts_u32 FeatureStagesRead;
 
   kbts_shape_error Error;
-} kbts_shape_scratchpad;
+};
 
 #define KBTS_CONTEXT_MAX_FONT_COUNT 32
 
@@ -13518,7 +13518,7 @@ typedef struct kbts__existing_glyph_config_block
   kbts__existing_glyph_config Items[KBTS__EXISTING_GLYPH_CONFIGS_PER_BLOCK];
 } kbts__existing_glyph_config_block;
 
-typedef struct kbts_shape_context
+struct kbts_shape_context
 {
   kbts_arena PermanentArena;
   kbts_arena FontArena;
@@ -13571,7 +13571,7 @@ typedef struct kbts_shape_context
   kbts_break_state BreakState;
 
   kbts_shape_error Error;
-} kbts_shape_context;
+};
 
 KBTS_INLINE kbts_b32 kbts__ExistingShapeConfigBlockIsValid(kbts_shape_context *Context, kbts__existing_shape_config_block *Block)
 {
@@ -13602,7 +13602,7 @@ typedef struct kbts__sequential_lookup
   kbts_u16 LookupIndex;
 } kbts__sequential_lookup;
 
-typedef struct kbts_shape_config
+struct kbts_shape_config
 {
   kbts_allocator_function *Allocator;
   void *AllocatorData;
@@ -13642,7 +13642,7 @@ typedef struct kbts_shape_config
   // Thai
   kbts_glyph Nikhahit;
   kbts_glyph SaraAa;
-} kbts_shape_config;
+};
 
 static const kbts_u8 kbts__CmapFormatPrecedence[14] = {1, 0, 1, 0, 2, 0, 1, 0, 3, 0, 3, 0, 4, 5};
 
@@ -13936,13 +13936,13 @@ typedef struct kbts__langsys_record
   kbts_u16 Offset;
 } kbts__langsys_record;
 
-typedef struct kbts__langsys
+struct kbts__langsys
 {
   kbts_u16 LookupOrderOffset; // reserved
   kbts_u16 RequiredFeatureIndex;
   kbts_u16 FeatureIndexCount;
   // kbts_u16 FeatureIndices[FeatureIndexCount];
-} kbts__langsys;
+};
 
 typedef struct kbts__feature_list
 {
@@ -13956,12 +13956,12 @@ typedef struct kbts__feature_record
   kbts_u16 Offset;
 } kbts__feature_record;
 
-typedef struct kbts__feature
+struct kbts__feature
 {
   kbts_u16 FeatureParamsOffset;
   kbts_u16 LookupIndexCount;
   // kbts_u16 LookupIndices[LookupIndexCount];
-} kbts__feature;
+};
 
 typedef struct kbts_lookup_list
 {
@@ -14318,13 +14318,13 @@ typedef struct kbts__sequential_map_group
   kbts_u32 StartGlyphId;
 } kbts__sequential_map_group;
 
-typedef struct kbts__cmap_14
+struct kbts__cmap_14
 {
   kbts_u16 Format;
   kbts_u32 Length;
   kbts_u32 SelectorCount;
   // kbts__variation_selector Selectors[SelectorCount];
-} kbts__cmap_14;
+};
 
 typedef struct kbts__variation_selector
 {
@@ -14357,7 +14357,7 @@ typedef struct kbts__uvs_mapping
   kbts_u16 GlyphId;
 } kbts__uvs_mapping;
 
-typedef struct kbts__gsub_gpos
+struct kbts__gsub_gpos
 {
   kbts_u16 Major;
   kbts_u16 Minor;
@@ -14365,7 +14365,7 @@ typedef struct kbts__gsub_gpos
   kbts_u16 FeatureListOffset;
   kbts_u16 LookupListOffset;
   kbts_u32 FeatureVariationsOffset; // Only present in v1.1
-} kbts__gsub_gpos;
+};
 
 typedef struct kbts__single_substitution
 {
@@ -14455,7 +14455,7 @@ typedef struct kbts__mark_glyph_sets
   // kbts_u32 CoverageOffsets[MarkGlyphSetCount];
 } kbts__mark_glyph_sets;
 
-typedef struct kbts__gdef
+struct kbts__gdef
 {
   kbts_u16 Major;
   kbts_u16 Minor;
@@ -14465,7 +14465,7 @@ typedef struct kbts__gdef
   kbts_u16 MarkAttachmentClassDefinitionOffset; // May be 0
   kbts_u16 MarkGlyphSetsDefinitionOffset;       // v1.2 and up; may be 0
   kbts_u32 ItemVariationStoreOffset;            // v1.3 and up; may be 0
-} kbts__gdef;
+};
 
 typedef struct kbts__anchor
 {
@@ -14625,7 +14625,7 @@ struct kbts__head
   kbts_s16 GlyphDataFormat; // Only 0 is defined.
 };
 
-typedef struct kbts__hea
+struct kbts__hea
 {
   kbts_u16 Major;
   kbts_u16 Minor;
@@ -14649,7 +14649,7 @@ typedef struct kbts__hea
 
   kbts_s16 MetricDataFormat;
   kbts_u16 MetricCount;
-} kbts__hea;
+};
 
 typedef struct kbts__os2
 {
@@ -14726,7 +14726,7 @@ typedef struct kbts__name
   // kbts__lang_tag_record LangTags[LangTagCount];
 } kbts__name;
 
-typedef struct kbts__maxp
+struct kbts__maxp
 {
   kbts_u16 Major;
   kbts_u16 Minor;
@@ -14746,7 +14746,7 @@ typedef struct kbts__maxp
   kbts_u16 MaximumInstructionSize;
   kbts_u16 MaximumTopLevelComponentCount;
   kbts_u16 MaximumComponentDepth;
-} kbts__maxp;
+};
 
 #  pragma pack(pop)
 
