@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.17 - text segmentation and shaping
+/*  kb_text_shape - v2.18 - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1320,6 +1320,7 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     2.18  - Improved handling of default-ignorable codepoints.
      2.17  - New function: kbts_PlaceShapeContextFixedMemory2.
      2.16  - New type: kbts_shape_context_flags.
              New functions: kbts_PlaceShapeContext2, kbts_CreateShapeContext2.
@@ -16019,6 +16020,7 @@ enum kbts__skip_flags_enum
   KBTS__SKIP_FLAG_NONE,
   KBTS__SKIP_FLAG_ZWNJ = (1 << 0),
   KBTS__SKIP_FLAG_ZWJ = (1 << 1),
+  KBTS__SKIP_FLAG_DEFAULT_IGNORABLES_NOT_SKIPPED_BY_GSUB = (1 << 2),
 };
 // The Harfbuzz behavior is:
 // - GPOS lookups always skip ZWNJ.
@@ -16027,12 +16029,18 @@ enum kbts__skip_flags_enum
 // - Regular lookups skip ZWJ when requested.
 #define KBTS__SKIP_FLAGS_GSUB_REGULAR(RequestedFlags) ((RequestedFlags) & KBTS__SKIP_FLAG_ZWJ)
 #define KBTS__SKIP_FLAGS_GSUB_SEQUENCE(RequestedFlags) (KBTS__SKIP_FLAG_ZWJ | ((RequestedFlags) & KBTS__SKIP_FLAG_ZWNJ))
-#define KBTS__SKIP_FLAGS_GPOS_REGULAR(RequestedFlags) (((RequestedFlags) & KBTS__SKIP_FLAG_ZWJ) | KBTS__SKIP_FLAG_ZWNJ)
-#define KBTS__SKIP_FLAGS_GPOS_SEQUENCE(RequestedFlags) (KBTS__SKIP_FLAG_ZWJ | KBTS__SKIP_FLAG_ZWNJ)
+#define KBTS__SKIP_FLAGS_GPOS_REGULAR(RequestedFlags) (((RequestedFlags) & KBTS__SKIP_FLAG_ZWJ) | KBTS__SKIP_FLAG_ZWNJ | KBTS__SKIP_FLAG_DEFAULT_IGNORABLES_NOT_SKIPPED_BY_GSUB)
+#define KBTS__SKIP_FLAGS_GPOS_SEQUENCE(RequestedFlags) (KBTS__SKIP_FLAG_ZWJ | KBTS__SKIP_FLAG_ZWNJ | KBTS__SKIP_FLAG_DEFAULT_IGNORABLES_NOT_SKIPPED_BY_GSUB)
 
-static kbts__skip_flags kbts__SkipFlags(kbts__feature_id FeatureId, kbts_shaper Shaper)
+static kbts__skip_flags kbts__SkipFlags(kbts_shaping_table ShapingTable, kbts__feature_id FeatureId, kbts_shaper Shaper)
 {
   kbts__skip_flags Result = 0;
+
+  if(ShapingTable == KBTS_SHAPING_TABLE_GPOS)
+  {
+    Result |= KBTS__SKIP_FLAG_DEFAULT_IGNORABLES_NOT_SKIPPED_BY_GSUB;
+  }
+
   switch(FeatureId)
   {
   case KBTS__FEATURE_ID_nukt:
@@ -16139,10 +16147,42 @@ static kbts_b32 kbts__GlyphPassesLookupFilter(kbts_glyph *Glyph, kbts__unpacked_
 
 static kbts_b32 kbts__SkipGlyph(kbts_glyph *Glyph, kbts__unpacked_lookup *Lookup, kbts__skip_flags SkipFlags, kbts_u32 SkipUnicodeFlags)
 {
-  kbts_b32 Result = (Glyph->UnicodeFlags & SkipUnicodeFlags) ||
-                    ((SkipFlags & KBTS__SKIP_FLAG_ZWNJ) && (Glyph->Codepoint == 0x200C)) ||
-                    ((SkipFlags & KBTS__SKIP_FLAG_ZWJ) && (Glyph->Codepoint == 0x200D)) ||
-                    !kbts__GlyphPassesLookupFilter(Glyph, Lookup);
+  kbts_b32 Result = 0;
+  if(!kbts__GlyphPassesLookupFilter(Glyph, Lookup))
+  {
+    Result = 1;
+  }
+  else
+  {
+    kbts_b32 SkipDefaultIgnorable = !(Glyph->Flags & KBTS_GLYPH_FLAG_GENERATED_BY_GSUB) && (Glyph->UnicodeFlags & SkipUnicodeFlags);
+    if(SkipDefaultIgnorable)
+    {
+      switch(Glyph->Codepoint)
+      {
+      // Even though they are default-ignorable codepoints, the following should not be skipped during GSUB:
+      // Combining grapheme joiner:
+      case 0x34F:
+      // Variation selectors:
+      case 0x180B: case 0x180C: case 0x180D: case 0x180F: // 0x180E is the Mongolian vowel separator; not a variation selector!
+      // Tags:
+      case 0xE0020: case 0xE0021: case 0xE0022: case 0xE0023: case 0xE0024: case 0xE0025: case 0xE0026: case 0xE0027: case 0xE0028: case 0xE0029: case 0xE002A: case 0xE002B: case 0xE002C: case 0xE002D: case 0xE002E: case 0xE002F:
+      case 0xE0030: case 0xE0031: case 0xE0032: case 0xE0033: case 0xE0034: case 0xE0035: case 0xE0036: case 0xE0037: case 0xE0038: case 0xE0039: case 0xE003A: case 0xE003B: case 0xE003C: case 0xE003D: case 0xE003E: case 0xE003F:
+      case 0xE0040: case 0xE0041: case 0xE0042: case 0xE0043: case 0xE0044: case 0xE0045: case 0xE0046: case 0xE0047: case 0xE0048: case 0xE0049: case 0xE004A: case 0xE004B: case 0xE004C: case 0xE004D: case 0xE004E: case 0xE004F:
+      case 0xE0050: case 0xE0051: case 0xE0052: case 0xE0053: case 0xE0054: case 0xE0055: case 0xE0056: case 0xE0057: case 0xE0058: case 0xE0059: case 0xE005A: case 0xE005B: case 0xE005C: case 0xE005D: case 0xE005E: case 0xE005F:
+      case 0xE0060: case 0xE0061: case 0xE0062: case 0xE0063: case 0xE0064: case 0xE0065: case 0xE0066: case 0xE0067: case 0xE0068: case 0xE0069: case 0xE006A: case 0xE006B: case 0xE006C: case 0xE006D: case 0xE006E: case 0xE006F:
+      case 0xE0070: case 0xE0071: case 0xE0072: case 0xE0073: case 0xE0074: case 0xE0075: case 0xE0076: case 0xE0077: case 0xE0078: case 0xE0079: case 0xE007A: case 0xE007B: case 0xE007C: case 0xE007D: case 0xE007E: case 0xE007F:
+      {
+        Result = SkipFlags & KBTS__SKIP_FLAG_DEFAULT_IGNORABLES_NOT_SKIPPED_BY_GSUB;
+      } break;
+
+      case 0x200C: Result = SkipFlags & KBTS__SKIP_FLAG_ZWNJ; break;
+      case 0x200D: Result = SkipFlags & KBTS__SKIP_FLAG_ZWJ; break;
+
+      default: Result = 1; break;
+      }
+    }
+  }
+
   return Result;
 }
 
@@ -19537,7 +19577,7 @@ static kbts__substitution_result_flags kbts__DoSubstitution(kbts_shape_scratchpa
 {
   kbts__substitution_result_flags Result = 0;
   kbts_font *Font = Config->Font;
-  kbts_unicode_flags SkipUnicodeFlags = 0; // @Incomplete
+  enum {SkipUnicodeFlags = KBTS_UNICODE_FLAG_DEFAULT_IGNORABLE};
   kbts__skip_flags RegularSkipFlags = KBTS__SKIP_FLAGS_GSUB_REGULAR(RequestedSkipFlags);
   kbts__skip_flags SequenceSkipFlags = KBTS__SKIP_FLAGS_GSUB_SEQUENCE(RequestedSkipFlags);
   GeneratedGlyphFlags |= KBTS_GLYPH_FLAG_GENERATED_BY_GSUB;
@@ -23410,7 +23450,7 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
                   BakedFeature.FeatureTag = Feature.Tag;
                   BakedFeature.FeatureId = FeatureId;
                   // CAREFUL: We use SkipFlags as a temporary index until the end of the stage.
-                  BakedFeature.SkipFlags = kbts__SkipFlags(BakedFeature.FeatureId, Config.Shaper);
+                  BakedFeature.SkipFlags = kbts__SkipFlags(ShapingTable, BakedFeature.FeatureId, Config.Shaper);
                   BakedFeature.Count = Feature.Feature->LookupIndexCount;
                   // These point directly into the file.
                   BakedFeature.Indices = KBTS__POINTER_AFTER(kbts_u16, Feature.Feature);
