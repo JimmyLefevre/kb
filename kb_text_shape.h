@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.18 - text segmentation and shaping
+/*  kb_text_shape - v2.19 - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1320,6 +1320,7 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     2.19  - Fix the glyph config cache not taking shape_configs into account.
      2.18  - Improved handling of default-ignorable codepoints.
      2.17  - New function: kbts_PlaceShapeContextFixedMemory2.
      2.16  - New type: kbts_shape_context_flags.
@@ -1339,7 +1340,7 @@
              Properly reset the glyph config cache in ShapeBegin.
      2.09  - Fix use-after-free when a shape_scratchpad was freed after its respective shape_config.
              Extended the GetFontInfo API to include metrics and bounding box information.
-               New types: kbts_font_info2, kbts_font_info2_1.
+               New types: kbts_font_info2, kbts_font_info2_1, kbts_font_info2_2.
                New function: kbts_GetFontInfo2().
      2.08  - Fix some UB.
      2.07  - Performance improvements.
@@ -13484,6 +13485,7 @@ typedef struct kbts__context_font
 
 typedef struct kbts__existing_glyph_config
 {
+  kbts_shape_config *ShapeConfig;
   kbts_feature_override *FeatureOverrides;
   int FeatureOverrideCount;
   kbts_glyph_config *GlyphConfig;
@@ -25091,7 +25093,8 @@ static kbts_glyph_config *kbts__FindOrCreateGlyphConfig(kbts_shape_context *Cont
       {
         kbts__existing_glyph_config *Existing = &ExistingBlock->Items[ExistingIndex];
 
-        if((Existing->FeatureOverrides == FeatureOverrides) &&
+        if((Existing->ShapeConfig == ShapeConfig) &&
+           (Existing->FeatureOverrides == FeatureOverrides) &&
            (Existing->FeatureOverrideCount == FeatureOverrideCount))
         {
           Result = Existing->GlyphConfig;
@@ -25125,6 +25128,7 @@ static kbts_glyph_config *kbts__FindOrCreateGlyphConfig(kbts_shape_context *Cont
 
       KBTS_ASSERT(Last->Count < KBTS__EXISTING_GLYPH_CONFIGS_PER_BLOCK);
       kbts__existing_glyph_config *Existing = &Last->Items[Last->Count++];
+      Existing->ShapeConfig = ShapeConfig;
       Existing->FeatureOverrides = FeatureOverrides;
       Existing->FeatureOverrideCount = FeatureOverrideCount;
       Existing->GlyphConfig = Result;
