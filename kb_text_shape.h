@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.20 - text segmentation and shaping
+/*  kb_text_shape - v2.21 - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1320,6 +1320,7 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     2.21  - Eliminate redundant typedefs for C99 compatibility.
      2.20  - Properly check kbts__InputCodepoint return values.
              Handle null shape configs in kbts_PlaceGlyphConfig.
      2.19  - Fix the glyph config cache not taking shape_configs into account.
