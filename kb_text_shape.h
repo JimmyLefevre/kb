@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.19 - text segmentation and shaping
+/*  kb_text_shape - v2.20 - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1320,6 +1320,8 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     2.20  - Properly check kbts__InputCodepoint return values.
+             Handle null shape configs in kbts_PlaceGlyphConfig.
      2.19  - Fix the glyph config cache not taking shape_configs into account.
      2.18  - Improved handling of default-ignorable codepoints.
      2.17  - New function: kbts_PlaceShapeContextFixedMemory2.
@@ -24062,7 +24064,7 @@ KBTS_EXPORT kbts_glyph_config *kbts_PlaceGlyphConfig(kbts_shape_config *ShapeCon
   kbts__pointer_bump_allocator Bump = kbts__PointerBumpAllocator(Memory);
   kbts_glyph_config *Result = kbts__PointerPushType(&Bump, kbts_glyph_config);
 
-  if(Memory)
+  if(ShapeConfig && Memory)
   {
     KBTS_MEMSET(Result, 0, sizeof(*Result));
 
@@ -24283,7 +24285,7 @@ static kbts__input_codepoint_index kbts__InputCodepointIndex(kbts_un FlatCodepoi
   return Result;
 }
 
-static kbts_shape_codepoint *kbts__InputCodepoint(kbts_shape_context *Context, kbts_un Index)
+static kbts_shape_codepoint *kbts__InputCodepoint(kbts_shape_context *Context, kbts_un Index, kbts_b32 AllocateIfNeeded)
 {
   kbts_shape_codepoint *Result = 0;
 
@@ -24292,7 +24294,7 @@ static kbts_shape_codepoint *kbts__InputCodepoint(kbts_shape_context *Context, k
     kbts__input_codepoint_index InputIndex = kbts__InputCodepointIndex(Index);
 
     kbts_shape_codepoint *Block = Context->InputBlocks[InputIndex.BlockIndex];
-    if(!Block)
+    if(!Block && AllocateIfNeeded)
     {
       Block = kbts__PushArray(&Context->PermanentArena, kbts_shape_codepoint, InputIndex.BlockCodepointCount);
       if(!Block)
@@ -24393,8 +24395,15 @@ KBTS_EXPORT int kbts_ShapeGetShapeCodepoint(kbts_shape_context *Context, int Cod
   if((CodepointIndex >= 0) &&
      ((kbts_un)CodepointIndex < Context->InputCodepointCount))
   {
-    kbts_shape_codepoint *Source = kbts__InputCodepoint(Context, (kbts_un)CodepointIndex);
-    *Codepoint = *Source;
+    kbts_shape_codepoint *Source = kbts__InputCodepoint(Context, (kbts_un)CodepointIndex, 0);
+    if(Source)
+    {
+      *Codepoint = *Source;
+    }
+    else
+    {
+      KBTS_MEMSET(Codepoint, 0, sizeof(*Codepoint));
+    }
 
     Result = 1;
   }
@@ -24411,7 +24420,7 @@ static void kbts__UpdateBreaks(kbts_shape_context *Context)
     {
       // Strictly speaking, we do not need all of the flags, but we record them all anyway so we can expose them to the user.
       kbts_un BreakPosition = (kbts_u32)Break.Position + Context->BreakStartIndex;
-      kbts_shape_codepoint *InputCodepoint = kbts__InputCodepoint(Context, BreakPosition);
+      kbts_shape_codepoint *InputCodepoint = kbts__InputCodepoint(Context, BreakPosition, 1);
 
       if(Break.Flags & KBTS_BREAK_FLAG_LINE_HARD)
       {
@@ -24455,18 +24464,21 @@ static void kbts__UpdateBreaks(kbts_shape_context *Context)
         Context->LastGraphemeBreakIndex = (kbts_u32)BreakPosition;
       }
 
-      InputCodepoint->BreakFlags |= Break.Flags;
-      if(Break.Flags & KBTS_BREAK_FLAG_SCRIPT)
+      if(InputCodepoint)
       {
-        InputCodepoint->Script = Break.Script;
-      }
-      if(Break.Flags & KBTS_BREAK_FLAG_DIRECTION)
-      {
-        InputCodepoint->Direction = Break.Direction;
-      }
-      if(Break.Flags & KBTS_BREAK_FLAG_PARAGRAPH_DIRECTION)
-      {
-        InputCodepoint->ParagraphDirection = Break.ParagraphDirection;
+        InputCodepoint->BreakFlags |= Break.Flags;
+        if(Break.Flags & KBTS_BREAK_FLAG_SCRIPT)
+        {
+          InputCodepoint->Script = Break.Script;
+        }
+        if(Break.Flags & KBTS_BREAK_FLAG_DIRECTION)
+        {
+          InputCodepoint->Direction = Break.Direction;
+        }
+        if(Break.Flags & KBTS_BREAK_FLAG_PARAGRAPH_DIRECTION)
+        {
+          InputCodepoint->ParagraphDirection = Break.ParagraphDirection;
+        }
       }
     }
   }
@@ -24604,7 +24616,7 @@ KBTS_EXPORT void kbts_ShapeCodepointWithUserId(kbts_shape_context *Context, int 
         Context->Flags &= ~KBTS__CONTEXT_FLAG_START_OF_MANUAL_RUN;
       }
 
-      kbts_shape_codepoint *To = kbts__InputCodepoint(Context, FlatCodepointIndex);
+      kbts_shape_codepoint *To = kbts__InputCodepoint(Context, FlatCodepointIndex, 1);
       if(To)
       {
         *To = InputCodepoint;
@@ -25012,8 +25024,11 @@ KBTS_EXPORT void kbts_ShapeEnd(kbts_shape_context *Context)
   if(!Context->Error)
   {
     // We check the break flags of the one-past-last codepoint, so reset it here.
-    kbts_shape_codepoint *OnePastLastCodepoint = kbts__InputCodepoint(Context, Context->InputCodepointCount);
-    *OnePastLastCodepoint = KBTS__ZERO_TYPE(kbts_shape_codepoint);
+    kbts_shape_codepoint *OnePastLastCodepoint = kbts__InputCodepoint(Context, Context->InputCodepointCount, 1);
+    if(OnePastLastCodepoint)
+    {
+      KBTS_MEMSET(OnePastLastCodepoint, 0, sizeof(*OnePastLastCodepoint));
+    }
 
     kbts_BreakEnd(&Context->BreakState);
     kbts__UpdateBreaks(Context);
@@ -25308,14 +25323,16 @@ KBTS_EXPORT int kbts_ShapeRun(kbts_shape_context *Context, kbts_run *Run)
     }
     else
     {
-      kbts_shape_codepoint *OnePastLast = kbts__InputCodepoint(Context, Context->InputCodepointCount);
-
-      if(OnePastLast->BreakFlags & KBTS_BREAK_FLAG_LINE_HARD)
+      kbts_shape_codepoint *OnePastLast = kbts__InputCodepoint(Context, Context->InputCodepointCount, 1);
+      if(OnePastLast)
       {
-        // Signal the terminating line break with a 0-sized run.
-        Run->Flags = OnePastLast->BreakFlags;
+        if(OnePastLast->BreakFlags & KBTS_BREAK_FLAG_LINE_HARD)
+        {
+          // Signal the terminating line break with a 0-sized run.
+          Run->Flags = OnePastLast->BreakFlags;
 
-        Result = 1;
+          Result = 1;
+        }
       }
 
       Context->DoneShapingRuns = 1;
