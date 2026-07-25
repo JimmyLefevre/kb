@@ -2336,7 +2336,16 @@ enum kbts_shape_context_flags_enum
   KBTS_SHAPE_CONTEXT_FLAG_NONE,
 
   KBTS_SHAPE_CONTEXT_FLAG_FONT_PRIORITY_BOTTOM_TO_TOP = (1 << 0), // Prioritize fonts that are pushed earlier, instead of the default which prioritizes fonts that are pushed later.
+  KBTS_SHAPE_CONTEXT_FLAG_RTL_LOGICAL_ORDER = (1 << 1), // Disable automatically reordering RTL glyphs to visual order
 };
+
+typedef kbts_u32 kbts_shape_config_flags;
+enum kbts_shape_config_flags_enum
+{
+    KBTS_SHAPE_CONFIG_FLAGS_NONE,
+
+    KBTS_SHAPE_CONFIG_FLAG_RTL_LOGICAL_ORDER = (1 << 0), // Disable automatically reordering RTL glyphs to visual order
+} kbts_shape_config_flags_enum;
 
 typedef kbts_u32 kbts_text_format;
 enum kbts_text_format_enum
@@ -3881,8 +3890,8 @@ KBTS_EXPORT void kbts_GetFontInfo2(kbts_font *Font, kbts_font_info2 *Info);
 
 // A shape_config is a bag of pre-computed data for a specific shaping setup.
 KBTS_EXPORT int kbts_SizeOfShapeConfig(kbts_font *Font, kbts_script Script, kbts_language Language);
-KBTS_EXPORT kbts_shape_config *kbts_PlaceShapeConfig(kbts_font *Font, kbts_script Script, kbts_language Language, void *Memory);
-KBTS_EXPORT kbts_shape_config *kbts_CreateShapeConfig(kbts_font *Font, kbts_script Script, kbts_language Language, kbts_allocator_function *Allocator, void *AllocatorData);
+KBTS_EXPORT kbts_shape_config *kbts_PlaceShapeConfig(kbts_font *Font, kbts_script Script, kbts_language Language, kbts_shape_config_flags Flags, void *Memory);
+KBTS_EXPORT kbts_shape_config *kbts_CreateShapeConfig(kbts_font *Font, kbts_script Script, kbts_language Language, kbts_shape_config_flags Flags, kbts_allocator_function *Allocator, void *AllocatorData);
 KBTS_EXPORT void kbts_DestroyShapeConfig(kbts_shape_config *Config);
 
 // A glyph_storage holds and recycles glyph data.
@@ -13472,6 +13481,7 @@ typedef struct kbts__existing_shape_config
 
   kbts_font *Font;
   kbts_script Script;
+  kbts_shape_config_flags Flags;
 } kbts__existing_shape_config;
 
 typedef kbts_u32 kbts__context_flags;
@@ -13624,6 +13634,7 @@ struct kbts_shape_config
   kbts__op_list OpList;
 
   kbts__feature_set Features;
+  kbts_shape_config_flags Flags;
 
   kbts_shaper Shaper;
   kbts_shaper_properties *ShaperProperties;
@@ -20436,7 +20447,8 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
           AfterFractionSlashGlyphFlags = Swap;
         }
 
-        kbts_b32 ShouldFlip = (Scratchpad->RunDirection == KBTS_DIRECTION_RTL);
+        int RtlLogicalOrder = (Scratchpad->Config->Flags & KBTS_SHAPE_CONFIG_FLAG_RTL_LOGICAL_ORDER) != 0;
+        kbts_b32 ShouldFlip = (!RtlLogicalOrder && Scratchpad->RunDirection == KBTS_DIRECTION_RTL);
 
         KBTS__FOR_GLYPH(Storage, Glyph)
         {
@@ -23220,7 +23232,7 @@ static kbts_b32 kbts__ReadOp(kbts_shape_scratchpad *Scratchpad, kbts__op_kind En
   return Result;
 }
 
-static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Script, kbts_language Language, void *Memory, kbts_un *Size)
+static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Script, kbts_language Language, kbts_shape_config_flags Flags, void *Memory, kbts_un *Size)
 {
   kbts_shape_config *Result = 0;
   kbts__pointer_bump_allocator Bump = kbts__PointerBumpAllocator(Memory);
@@ -23234,6 +23246,7 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
     Config.Font = Font;
     Config.Script = Script;
     Config.Language = Language;
+    Config.Flags = Flags;
 
     kbts__gsub_gpos *ShapingTables[2] = {
       kbts__BlobTableDataType(Font->Blob, KBTS_BLOB_TABLE_ID_GSUB, kbts__gsub_gpos),
@@ -23657,19 +23670,19 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
 KBTS_EXPORT int kbts_SizeOfShapeConfig(kbts_font *Font, kbts_script Script, kbts_language Language)
 {
   kbts_un Size;
-  kbts__PlaceShapeConfig(Font, Script, Language, 0, &Size);
+  kbts__PlaceShapeConfig(Font, Script, Language, KBTS_SHAPE_CONFIG_FLAGS_NONE, 0, &Size);
 
   return (int)Size;
 }
 
-KBTS_EXPORT kbts_shape_config *kbts_PlaceShapeConfig(kbts_font *Font, kbts_script Script, kbts_language Language, void *Memory)
+KBTS_EXPORT kbts_shape_config *kbts_PlaceShapeConfig(kbts_font *Font, kbts_script Script, kbts_language Language, kbts_shape_config_flags Flags, void *Memory)
 {
   kbts_un Size;
-  kbts_shape_config *Result = kbts__PlaceShapeConfig(Font, Script, Language, Memory, &Size);
+  kbts_shape_config *Result = kbts__PlaceShapeConfig(Font, Script, Language, Memory, Flags, &Size);
   return Result;
 }
 
-KBTS_EXPORT kbts_shape_config *kbts_CreateShapeConfig(kbts_font *Font, kbts_script Script, kbts_language Language, kbts_allocator_function *Allocator, void *AllocatorData)
+KBTS_EXPORT kbts_shape_config *kbts_CreateShapeConfig(kbts_font *Font, kbts_script Script, kbts_language Language, kbts_shape_config_flags Flags, kbts_allocator_function *Allocator, void *AllocatorData)
 {
   if(!Allocator)
   {
@@ -23677,8 +23690,8 @@ KBTS_EXPORT kbts_shape_config *kbts_CreateShapeConfig(kbts_font *Font, kbts_scri
   }
 
   kbts_un Size;
-  kbts__PlaceShapeConfig(Font, Script, Language, 0, &Size);
-  kbts_shape_config *Result = kbts__PlaceShapeConfig(Font, Script, Language, kbts__AllocatorAllocate(Allocator, AllocatorData, Size), &Size);
+  kbts__PlaceShapeConfig(Font, Script, Language, KBTS_SHAPE_CONFIG_FLAGS_NONE, 0, &Size);
+  kbts_shape_config *Result = kbts__PlaceShapeConfig(Font, Script, Language, Flags, kbts__AllocatorAllocate(Allocator, AllocatorData, Size), &Size);
   if(Result)
   {
     Result->Allocator = Allocator;
@@ -25045,7 +25058,7 @@ KBTS_EXPORT void kbts_ShapeEnd(kbts_shape_context *Context)
   }
 }
 
-static kbts_shape_config *kbts__FindOrCreateShapeConfig(kbts_shape_context *Context, kbts_font *Font, kbts_script Script, kbts_language Language)
+static kbts_shape_config *kbts__FindOrCreateShapeConfig(kbts_shape_context *Context, kbts_font *Font, kbts_script Script, kbts_language Language, kbts_shape_config_flags Flags)
 {
   kbts_shape_config *Result = 0;
 
@@ -25058,7 +25071,8 @@ static kbts_shape_config *kbts__FindOrCreateShapeConfig(kbts_shape_context *Cont
       kbts__existing_shape_config *Existing = &ExistingBlock->Items[ExistingIndex];
 
       if((Existing->Font == Font) &&
-         (Existing->Script == Script))
+         (Existing->Script == Script) &&
+         (Existing->Flags == Flags))
       {
         Result = Existing->Config;
 
@@ -25087,13 +25101,14 @@ static kbts_shape_config *kbts__FindOrCreateShapeConfig(kbts_shape_context *Cont
       Last = NewBlock;
     }
 
-    Result = kbts_CreateShapeConfig(Font, Script, Language, kbts__ArenaAllocator, &Context->ConfigArena);
+    Result = kbts_CreateShapeConfig(Font, Script, Language, Flags, kbts__ArenaAllocator, &Context->ConfigArena);
 
     KBTS_ASSERT(Last->Count < KBTS__EXISTING_SHAPE_CONFIGS_PER_BLOCK);
     kbts__existing_shape_config *NewExisting = &Last->Items[Last->Count++];
     NewExisting->Config = Result;
     NewExisting->Font = Font;
     NewExisting->Script = Script;
+    NewExisting->Flags = Flags;
   }
 
   return Result;
@@ -25171,6 +25186,10 @@ KBTS_EXPORT int kbts_ShapeRun(kbts_shape_context *Context, kbts_run *Run)
     kbts_direction RunDirection = Context->RunDirection;
     kbts_language Language = Context->Language;
     kbts_shape_config *ShapeConfig = 0;
+
+    // Generate the shape config flags
+    kbts_shape_config_flags ShapeFlags = KBTS_SHAPE_CONFIG_FLAGS_NONE;
+    ShapeFlags |= (Context->PublicFlags & KBTS_SHAPE_CONTEXT_FLAG_RTL_LOGICAL_ORDER) * KBTS_SHAPE_CONFIG_FLAG_RTL_LOGICAL_ORDER;
 
     Run->Flags = 0;
 
@@ -25278,7 +25297,7 @@ KBTS_EXPORT int kbts_ShapeRun(kbts_shape_context *Context, kbts_run *Run)
             RunParagraphDirection = Context->RunParagraphDirection;
 
             // Initialize the shape_config now, before pushing glyphs.
-            ShapeConfig = kbts__FindOrCreateShapeConfig(Context, RunFont, RunScript, Language);
+            ShapeConfig = kbts__FindOrCreateShapeConfig(Context, RunFont, RunScript, Language, ShapeFlags);
 
             kbts_glyph_config *GlyphConfig = kbts__FindOrCreateGlyphConfig(Context, ShapeConfig, InputCodepoint->FeatureOverrides, InputCodepoint->FeatureOverrideCount);
             kbts_PushGlyph(&Context->GlyphStorage, RunFont, InputCodepoint->Codepoint, GlyphConfig, InputCodepointIndex);
@@ -25291,7 +25310,7 @@ KBTS_EXPORT int kbts_ShapeRun(kbts_shape_context *Context, kbts_run *Run)
           // This is an exceptional case, but it can happen when we detect no script.
           if(!ShapeConfig)
           {
-            ShapeConfig = kbts__FindOrCreateShapeConfig(Context, RunFont, RunScript, Language);
+            ShapeConfig = kbts__FindOrCreateShapeConfig(Context, RunFont, RunScript, Language, ShapeFlags);
           }
 
           kbts_glyph_config *GlyphConfig = kbts__FindOrCreateGlyphConfig(Context, ShapeConfig, InputCodepoint->FeatureOverrides, InputCodepoint->FeatureOverrideCount);
