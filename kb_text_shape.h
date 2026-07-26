@@ -25189,7 +25189,7 @@ KBTS_EXPORT int kbts_ShapeRun(kbts_shape_context *Context, kbts_run *Run)
 
     // Generate the shape config flags
     kbts_shape_config_flags ShapeFlags = KBTS_SHAPE_CONFIG_FLAGS_NONE;
-    ShapeFlags |= (Context->PublicFlags & KBTS_SHAPE_CONTEXT_FLAG_RTL_LOGICAL_ORDER) * KBTS_SHAPE_CONFIG_FLAG_RTL_LOGICAL_ORDER;
+    ShapeFlags |= ((Context->PublicFlags & KBTS_SHAPE_CONTEXT_FLAG_RTL_LOGICAL_ORDER) != 0) * KBTS_SHAPE_CONFIG_FLAG_RTL_LOGICAL_ORDER;
 
     Run->Flags = 0;
 
