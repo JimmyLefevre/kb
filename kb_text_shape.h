@@ -20203,7 +20203,6 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
   {
     kbts_font *Font = Config->Font;
     kbts__op_kind OpKind = Scratchpad->OpKind;
-    int RtlLogicalOrder = (Scratchpad->Config->Flags & KBTS_SHAPE_CONFIG_FLAG_RTL_LOGICAL_ORDER) != 0;
 
     switch(OpKind)
     {
@@ -20448,7 +20447,7 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
           AfterFractionSlashGlyphFlags = Swap;
         }
 
-        kbts_b32 ShouldFlip = (!RtlLogicalOrder && Scratchpad->RunDirection == KBTS_DIRECTION_RTL);
+        kbts_b32 ShouldFlip = (Scratchpad->RunDirection == KBTS_DIRECTION_RTL);
 
         KBTS__FOR_GLYPH(Storage, Glyph)
         {
@@ -21426,6 +21425,7 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
       kbts_glyph WhitespaceGlyph = Config->Whitespace;
       int ClearMarkAdvances = kbts__ShaperClearsMarkAdvancesInPostGposFixup(Config->Shaper);
 
+      int RtlLogicalOrder = (Scratchpad->Config->Flags & KBTS_SHAPE_CONFIG_FLAG_RTL_LOGICAL_ORDER) != 0;
       if(!RtlLogicalOrder && Scratchpad->RunDirection == KBTS_DIRECTION_RTL)
       {
         // Flip direction.
