@@ -23678,7 +23678,7 @@ KBTS_EXPORT int kbts_SizeOfShapeConfig(kbts_font *Font, kbts_script Script, kbts
 KBTS_EXPORT kbts_shape_config *kbts_PlaceShapeConfig(kbts_font *Font, kbts_script Script, kbts_language Language, kbts_shape_config_flags Flags, void *Memory)
 {
   kbts_un Size;
-  kbts_shape_config *Result = kbts__PlaceShapeConfig(Font, Script, Language, Memory, Flags, &Size);
+  kbts_shape_config *Result = kbts__PlaceShapeConfig(Font, Script, Language, Flags, Memory, &Size);
   return Result;
 }
 
