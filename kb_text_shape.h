@@ -346,6 +346,12 @@
             kbts_ShapePushFontFromMemory, then the pointer is still returned, but it points to
             freed memory.
 
+            The shape and glyph configs the context cached for the font are dropped and
+            their memory is freed, unless the font is still on the stack lower down. The
+            context keys them by font pointer and by shape config pointer, so nothing of a
+            popped font is left for a font or a config allocated at the same address to
+            match against.
+
         CONTEXT:SHAPING
           :kbts_ShapeBegin
           :ShapeBegin
@@ -13490,6 +13496,7 @@ typedef struct kbts__context_font
 {
   kbts_font *Font;
   kbts__arena_lifetime Lifetime;
+  kbts_arena ConfigArena; // The configs cached for this font, freed when it is popped.
 } kbts__context_font;
 
 typedef struct kbts__existing_glyph_config
@@ -23793,6 +23800,11 @@ KBTS_EXPORT void kbts_DestroyShapeContext(kbts_shape_context *Context)
 {
   if(Context)
   {
+    KBTS__FOR(Index, 0, Context->FontCount)
+    {
+      kbts__FreeArena(&Context->Fonts[Index].ConfigArena);
+    }
+
     kbts__FreeArena(&Context->PermanentArena);
     kbts__FreeArena(&Context->ConfigArena);
     kbts__FreeArena(&Context->ScratchArena);
@@ -23821,6 +23833,9 @@ static kbts__context_font *kbts__ShapePushFont(kbts_shape_context *Context)
     Result = &Context->Fonts[Context->FontCount++];
     Result->Font = 0;
     Result->Lifetime = kbts__BeginLifetime(&Context->FontArena);
+    KBTS_MEMSET(&Result->ConfigArena, 0, sizeof(Result->ConfigArena));
+    Result->ConfigArena.Allocator = Context->ConfigArena.Allocator;
+    Result->ConfigArena.AllocatorData = Context->ConfigArena.AllocatorData;
   }
 
   return Result;
@@ -23841,6 +23856,74 @@ KBTS_EXPORT kbts_font *kbts_ShapePushFont(kbts_shape_context *Context, kbts_font
   return Font;
 }
 
+// The arena holding [Font]'s configs: the one of the lowest push of it, so a
+// font pushed more than once keeps one set of configs for its whole time on the
+// stack. A font that is not on the stack falls back to the context's arena.
+static kbts_arena *kbts__FontConfigArena(kbts_shape_context *Context, kbts_font *Font)
+{
+  KBTS__FOR(Index, 0, Context->FontCount)
+  {
+    if(Context->Fonts[Index].Font == Font)
+    {
+      return &Context->Fonts[Index].ConfigArena;
+    }
+  }
+
+  return &Context->ConfigArena;
+}
+
+static kbts_b32 kbts__ShapeConfigIsCached(kbts_shape_context *Context, kbts_shape_config *Config)
+{
+  for(kbts__existing_shape_config_block *Block = (kbts__existing_shape_config_block *)Context->ExistingShapeConfigBlockSentinel.Next;
+      kbts__ExistingShapeConfigBlockIsValid(Context, Block);
+      Block = (kbts__existing_shape_config_block *)Block->Header.Next)
+  {
+    KBTS__FOR(Index, 0, Block->Count)
+    {
+      if(Block->Items[Index].Config == Config) return 1;
+    }
+  }
+
+  return 0;
+}
+
+// Drop the configs cached for [Font], and the glyph configs built on them. The
+// cache keys shape configs by font pointer and glyph configs by shape config
+// pointer, so an address reused by a later allocation would read these. Their
+// memory stays in the context's config arena until the context is destroyed.
+static void kbts__EvictFontConfigs(kbts_shape_context *Context, kbts_font *Font)
+{
+  for(kbts__existing_shape_config_block *Block = (kbts__existing_shape_config_block *)Context->ExistingShapeConfigBlockSentinel.Next;
+      kbts__ExistingShapeConfigBlockIsValid(Context, Block);
+      Block = (kbts__existing_shape_config_block *)Block->Header.Next)
+  {
+    kbts_u32 KeptCount = 0;
+    KBTS__FOR(Index, 0, Block->Count)
+    {
+      if(Block->Items[Index].Font != Font)
+      {
+        Block->Items[KeptCount++] = Block->Items[Index];
+      }
+    }
+    Block->Count = KeptCount;
+  }
+
+  for(kbts__existing_glyph_config_block *Block = (kbts__existing_glyph_config_block *)Context->ExistingGlyphConfigBlockSentinel.Next;
+      kbts__ExistingGlyphConfigBlockIsValid(Context, Block);
+      Block = (kbts__existing_glyph_config_block *)Block->Header.Next)
+  {
+    kbts_u32 KeptCount = 0;
+    KBTS__FOR(Index, 0, Block->Count)
+    {
+      if(kbts__ShapeConfigIsCached(Context, Block->Items[Index].ShapeConfig))
+      {
+        Block->Items[KeptCount++] = Block->Items[Index];
+      }
+    }
+    Block->Count = KeptCount;
+  }
+}
+
 KBTS_EXPORT kbts_font *kbts_ShapePopFont(kbts_shape_context *Context)
 {
   kbts_font *Result = 0;
@@ -23853,6 +23936,25 @@ KBTS_EXPORT kbts_font *kbts_ShapePopFont(kbts_shape_context *Context)
     kbts__EndLifetime(&ContextFont->Lifetime);
 
     Context->FontCount -= 1;
+
+    kbts_b32 StillPushed = 0;
+    KBTS__FOR(Index, 0, Context->FontCount)
+    {
+      if(Context->Fonts[Index].Font == Result)
+      {
+        StillPushed = 1;
+        break;
+      }
+    }
+
+    if(Result && !StillPushed)
+    {
+      kbts__EvictFontConfigs(Context, Result);
+    }
+
+    // Configs go to the arena of the lowest push of their font, so this arena
+    // holds nothing while a lower push of the same font stands.
+    kbts__FreeArena(&ContextFont->ConfigArena);
   }
 
   return Result;
@@ -25097,7 +25199,7 @@ static kbts_shape_config *kbts__FindOrCreateShapeConfig(kbts_shape_context *Cont
       Last = NewBlock;
     }
 
-    Result = kbts_CreateShapeConfig(Font, Script, Language, kbts__ArenaAllocator, &Context->ConfigArena);
+    Result = kbts_CreateShapeConfig(Font, Script, Language, kbts__ArenaAllocator, kbts__FontConfigArena(Context, Font));
 
     KBTS_ASSERT(Last->Count < KBTS__EXISTING_SHAPE_CONFIGS_PER_BLOCK);
     kbts__existing_shape_config *NewExisting = &Last->Items[Last->Count++];
@@ -25123,9 +25225,22 @@ static kbts_glyph_config *kbts__FindOrCreateGlyphConfig(kbts_shape_context *Cont
       {
         kbts__existing_glyph_config *Existing = &ExistingBlock->Items[ExistingIndex];
 
-        if((Existing->ShapeConfig == ShapeConfig) &&
-           (Existing->FeatureOverrides == FeatureOverrides) &&
-           (Existing->FeatureOverrideCount == FeatureOverrideCount))
+        kbts_b32 Match = (Existing->ShapeConfig == ShapeConfig) &&
+                         (Existing->FeatureOverrideCount == FeatureOverrideCount);
+        if(Match)
+        {
+          KBTS__FOR(MatchIndex, 0, (kbts_un)FeatureOverrideCount)
+          {
+            if((Existing->FeatureOverrides[MatchIndex].Tag != FeatureOverrides[MatchIndex].Tag) ||
+               (Existing->FeatureOverrides[MatchIndex].Value != FeatureOverrides[MatchIndex].Value))
+            {
+              Match = 0;
+              break;
+            }
+          }
+        }
+
+        if(Match)
         {
           Result = Existing->GlyphConfig;
 
@@ -25154,12 +25269,30 @@ static kbts_glyph_config *kbts__FindOrCreateGlyphConfig(kbts_shape_context *Cont
         Last = NewBlock;
       }
 
-      Result = kbts_CreateGlyphConfig(ShapeConfig, FeatureOverrides, FeatureOverrideCount, kbts__ArenaAllocator, &Context->ConfigArena);
+      kbts_arena *FontArena = kbts__FontConfigArena(Context, ShapeConfig->Font);
+      Result = kbts_CreateGlyphConfig(ShapeConfig, FeatureOverrides, FeatureOverrideCount, kbts__ArenaAllocator, FontArena);
+
+      // The incoming FeatureOverrides live in ScratchArena, which is cleared on
+      // every ShapeBegin, so the same address is reused across shaping runs with
+      // different contents. Copy them into the config arena that backs this
+      // cache, otherwise the pointer-and-count key collides and a later run gets
+      // an earlier run's glyph config.
+      kbts_feature_override *OverridesCopy = kbts__PushArray(FontArena, kbts_feature_override, FeatureOverrideCount);
+      if(!OverridesCopy)
+      {
+        Context->Error = KBTS_SHAPE_ERROR_OUT_OF_MEMORY;
+
+        return 0;
+      }
+      KBTS__FOR(CopyIndex, 0, (kbts_un)FeatureOverrideCount)
+      {
+        OverridesCopy[CopyIndex] = FeatureOverrides[CopyIndex];
+      }
 
       KBTS_ASSERT(Last->Count < KBTS__EXISTING_GLYPH_CONFIGS_PER_BLOCK);
       kbts__existing_glyph_config *Existing = &Last->Items[Last->Count++];
       Existing->ShapeConfig = ShapeConfig;
-      Existing->FeatureOverrides = FeatureOverrides;
+      Existing->FeatureOverrides = OverridesCopy;
       Existing->FeatureOverrideCount = FeatureOverrideCount;
       Existing->GlyphConfig = Result;
     }
