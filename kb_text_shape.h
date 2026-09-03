@@ -13421,6 +13421,14 @@ typedef struct kbts__bucketed_glyph_block
 } kbts__bucketed_glyph_block;
 
 #define KBTS_MAX_SIMULTANEOUS_FEATURES 32
+
+// How many of a language system's features one shaping stage can bake. The user
+// feature stages take every feature the font lists, so this bounds the font, not
+// the caller: a language system with more features than this loses the ones past
+// the limit, and no override can turn them on.
+#ifndef KBTS_MAX_FEATURES_PER_STAGE
+#define KBTS_MAX_FEATURES_PER_STAGE 256
+#endif
 struct kbts_shape_scratchpad
 {
   kbts_allocator_function *Allocator;
@@ -23407,8 +23415,8 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
             kbts__langsys *Langsys = Config.Langsys[ShapingTable];
             kbts_un BakedFeatureLookupIndexCount = 0;
 
-            kbts__baked_feature BakedFeatures[KBTS_MAX_SIMULTANEOUS_FEATURES];
-            kbts_u16 BakedFeatureLookupIndicesRead[KBTS_MAX_SIMULTANEOUS_FEATURES];
+            kbts__baked_feature BakedFeatures[KBTS_MAX_FEATURES_PER_STAGE];
+            kbts_u16 BakedFeatureLookupIndicesRead[KBTS_MAX_FEATURES_PER_STAGE];
             kbts_un BakedFeatureCount = 0;
 
             if(GsubGpos && Langsys)
@@ -23431,7 +23439,7 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
                 {
                   BakedFeatureCount += 1;
 
-                  if(BakedFeatureCount == KBTS_MAX_SIMULTANEOUS_FEATURES)
+                  if(BakedFeatureCount == KBTS_MAX_FEATURES_PER_STAGE)
                   {
                     break;
                   }
@@ -23495,7 +23503,7 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
                   BakedFeatureCount += 1;
                   BakedFeatureLookupIndexCount += BakedFeature.Count;
 
-                  if(BakedFeatureCount >= KBTS_MAX_SIMULTANEOUS_FEATURES)
+                  if(BakedFeatureCount >= KBTS_MAX_FEATURES_PER_STAGE)
                   {
                     break;
                   }
