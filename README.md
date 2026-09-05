@@ -19,6 +19,7 @@
 - ICU-like text segmentation (i.e. breaking Unicode text by direction, line, script, word and grapheme).
 - Harfbuzz-like text shaping for OpenType fonts, which means it is capable of handling complex script layout and ligatures, among other things.
 - Font coverage checking: know if a font can display a given string.
+- OpenType variable font support: shape with the right advances, metrics, kerning, and feature substitutions for any axis selection (`fvar`/`avar`/`HVAR`/`VVAR`/`MVAR`/`FeatureVariations`/GDEF `ItemVariationStore`).
 
 It does **not** handle rasterization. It does **not** handle paragraph layout. It does **not** handle selection and loading of system fonts. It will only help you know which glyphs to display where on a single, infinitely-long line, using the fonts you have provided!
 
@@ -68,3 +69,32 @@ void Example(void)
   HandleText(Context, (const char *)u8"یکအမည်မရှိیک", KBTS_LANGUAGE_ARABIC);
 }
 ```
+
+### Variable fonts
+
+A variable font (e.g. `NotoSans[wdth,wght].ttf`) ships many design styles in
+one .ttf. Pick a design point with `kbts_GetFontVariation`, passing a sparse
+list of `(axis-tag, user-value)` pairs in 16.16 fixed. The font itself does not
+change; you hold the `kbts_font_variation` and hand it to the shaper:
+
+```c
+kbts_font Font = kbts_FontFromFile("NotoSans[wdth,wght].ttf", 0, 0, 0, &FileData, &FileSize);
+
+// Bold, semi-condensed.
+kbts_axis_value Values[] = {
+  { KBTS_FOURCC('w','g','h','t'), 700 << 16 },
+  { KBTS_FOURCC('w','d','t','h'), (87 << 16) | 32768 }, // 87.5
+};
+kbts_font_variation Variation;
+kbts_GetFontVariation(&Font, Values, 2, &Variation);
+
+kbts_ShapePushFontWithVariation(Context, &Font, &Variation);
+
+// Shapes on that font now use the advances, kerning, and feature swaps of the
+// design point. kbts_CreateShapeConfigWithVariation is the low-level equivalent,
+// and kbts_GetFontInfo2WithVariation reports its metrics and style.
+```
+
+`kbts_FontVariationAxisCount` / `kbts_GetFontVariationAxis` enumerate the
+available axes; `kbts_GetFontVariationInstance` walks the `fvar` named
+instances if you'd rather pick by name.
