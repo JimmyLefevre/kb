@@ -23454,6 +23454,7 @@ static kbts_glyph *kbts__BeginCluster(kbts_shape_scratchpad *Scratchpad, kbts_gl
            (Glyph->SyllabicClass >= KBTS_MYANMAR_SYLLABIC_CLASS_COUNT)))
     {
       NonCluster = 1;
+      Glyph = Glyph->Next;
     }
 
     if(!NonCluster)
