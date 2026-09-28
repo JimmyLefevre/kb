@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.28c - text segmentation and shaping
+/*  kb_text_shape - v2.28d - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1560,6 +1560,8 @@
      .                       .                  .                    .
 
    VERSION HISTORY
+     2.28d - Better cache keys in the context.
+             Fix an infinite loop in non-cluster Myanmar syllable splitting.
      2.28c - Only perform single decomposition on unsupported glyphs.
      2.28b - Make kbts_PlaceBlob not error out when State->ScratchSize is 0 and ScratchMemory is NULL.
              Make kbts_PlaceBlob return KBTS_LOAD_FONT_ERROR_NONE when State->TotalSize is 0 and OutputMemory is 0.
@@ -13800,6 +13802,7 @@ typedef struct kbts__interned_context_font_info
   kbts_font *Font;
   float *VariationVector;
   kbts_s16 *VariationVectorNormalized;
+  kbts_u32 Hash;
 } kbts__interned_context_font_info;
 
 typedef struct kbts__context_font_info
@@ -13817,6 +13820,7 @@ typedef struct kbts__existing_shape_config
 
   kbts__interned_context_font_info *FontInfo;
   kbts_script Script;
+  kbts_language Language;
 } kbts__existing_shape_config;
 
 typedef kbts_u32 kbts__context_flags;
@@ -13843,6 +13847,7 @@ typedef struct kbts__existing_glyph_config
   kbts_shape_config *ShapeConfig;
   kbts_feature_override *FeatureOverrides;
   int FeatureOverrideCount;
+  kbts_u32 Hash;
   kbts_glyph_config *GlyphConfig;
 } kbts__existing_glyph_config;
 
@@ -23454,6 +23459,7 @@ static kbts_glyph *kbts__BeginCluster(kbts_shape_scratchpad *Scratchpad, kbts_gl
            (Glyph->SyllabicClass >= KBTS_MYANMAR_SYLLABIC_CLASS_COUNT)))
     {
       NonCluster = 1;
+      Glyph = Glyph->Next;
     }
 
     if(!NonCluster)
@@ -25776,6 +25782,24 @@ KBTS_EXPORT int kbts_SizeOfGlyphConfig(kbts_shape_config *ShapeConfig, kbts_feat
   return (int)Result;
 }
 
+static kbts_u32 kbts__GlyphConfigHash(kbts_shape_config *ShapeConfig, kbts_feature_override *Overrides, kbts_un OverrideCount)
+{
+  kbts__murmur_state Murmur;
+  kbts__MurmurBegin(&Murmur, ShapeConfig->Uid.Data[0] ^ ShapeConfig->Uid.Data[1] ^ ShapeConfig->Uid.Data[2] ^ ShapeConfig->Uid.Data[3]);
+
+  // Note that different override orders will result in different hashes.
+  KBTS__FOR(OverrideIndex, 0, OverrideCount)
+  {
+    kbts_feature_override *Override = &Overrides[OverrideIndex];
+
+    kbts__MurmurAbsorb(&Murmur, Override->Tag);
+    kbts__MurmurAbsorb(&Murmur, (kbts_u32)Override->Value);
+  }
+
+  kbts_u32 Result = kbts__MurmurFinalize(&Murmur);
+  return Result;
+}
+
 KBTS_EXPORT kbts_glyph_config *kbts_PlaceGlyphConfig(kbts_shape_config *ShapeConfig, kbts_feature_override *Overrides, int OverrideCount, void *Memory)
 {
   kbts__pointer_bump_allocator Bump = kbts__PointerBumpAllocator(Memory);
@@ -25901,13 +25925,6 @@ KBTS_EXPORT kbts_glyph_config *kbts_PlaceGlyphConfig(kbts_shape_config *ShapeCon
     Result->NonBinaryEnabledLookupCount = (kbts_u32)NonBinaryEnabledLookupCount;
     Result->EnabledLookupBits = EnabledLookupBits;
     Result->DisabledLookupBits = DisabledLookupBits;
-  }
-
-  kbts__feature_set OverriddenFeatures = KBTS__ZERO;
-  KBTS__FOR(OverrideIndex, 0, (kbts_un)OverrideCount)
-  {
-    kbts_feature_override *Override = &Overrides[OverrideIndex];
-    kbts__AddFeature(&OverriddenFeatures, kbts__FeatureTagToId(Override->Tag));
   }
 
   return Result;
@@ -26264,6 +26281,24 @@ static kbts__interned_context_font_info *kbts__InternContextFontInfo(kbts_shape_
         New->Font = FontInfo->Font;
         New->VariationVector = VariationVector;
         New->VariationVectorNormalized = 0;
+
+        kbts__murmur_state Murmur;
+        kbts__MurmurBegin(&Murmur, 0x97978573);
+        kbts__MurmurAbsorb(&Murmur, (kbts_u32)(kbts_un)FontInfo->Font);
+        kbts__MurmurAbsorb(&Murmur, (kbts_u32)((kbts_un)FontInfo->Font >> 32));
+        if(VariationVector)
+        {
+          for(int AxisIndex = 0;
+              AxisIndex < AxisCount;
+              ++AxisIndex)
+          {
+            typedef union {kbts_u32 U; float F;} uf;
+            uf *Axis = (uf *)&VariationVector[AxisIndex];
+
+            kbts__MurmurAbsorb(&Murmur, Axis->U);
+          }
+        }
+        New->Hash = kbts__MurmurFinalize(&Murmur);
 
         FontInfo->Interned = New;
         FontInfo->Flags &= ~KBTS__CONTEXT_FONT_FLAG_VARIATIONS_DIRTY;
@@ -27116,8 +27151,9 @@ static kbts_shape_config *kbts__FindOrCreateShapeConfig(kbts_shape_context *Cont
     {
       kbts__existing_shape_config *Existing = &ExistingBlock->Items[ExistingIndex];
 
-      if((Existing->FontInfo == FontInfo) &&
-         (Existing->Script == Script))
+      if((Existing->FontInfo->Hash == FontInfo->Hash) &&
+         (Existing->Script == Script) &&
+         (Existing->Language == Language))
       {
         Result = Existing->Config;
 
@@ -27153,8 +27189,18 @@ static kbts_shape_config *kbts__FindOrCreateShapeConfig(kbts_shape_context *Cont
     NewExisting->Config = Result;
     NewExisting->FontInfo = FontInfo;
     NewExisting->Script = Script;
+    NewExisting->Language = Language;
   }
 
+  return Result;
+}
+
+static kbts_b32 kbts__UidEquals(kbts_uid A, kbts_uid B)
+{
+  kbts_b32 Result = (A.Data[0] == B.Data[0]) &
+                    (A.Data[1] == B.Data[1]) &
+                    (A.Data[2] == B.Data[2]) &
+                    (A.Data[3] == B.Data[3]);
   return Result;
 }
 
@@ -27162,8 +27208,10 @@ static kbts_glyph_config *kbts__FindOrCreateGlyphConfig(kbts_shape_context *Cont
 {
   kbts_glyph_config *Result = 0;
 
-  if(FeatureOverrideCount)
+  if(FeatureOverrideCount > 0)
   {
+    kbts_u32 Hash = kbts__GlyphConfigHash(ShapeConfig, FeatureOverrides, (kbts_un)FeatureOverrideCount);
+
     for(kbts__existing_glyph_config_block *ExistingBlock = (kbts__existing_glyph_config_block *)Context->ExistingGlyphConfigBlockSentinel.Next;
         kbts__ExistingGlyphConfigBlockIsValid(Context, ExistingBlock);
         ExistingBlock = (kbts__existing_glyph_config_block *)ExistingBlock->Header.Next)
@@ -27172,9 +27220,7 @@ static kbts_glyph_config *kbts__FindOrCreateGlyphConfig(kbts_shape_context *Cont
       {
         kbts__existing_glyph_config *Existing = &ExistingBlock->Items[ExistingIndex];
 
-        if((Existing->ShapeConfig == ShapeConfig) &&
-           (Existing->FeatureOverrides == FeatureOverrides) &&
-           (Existing->FeatureOverrideCount == FeatureOverrideCount))
+        if(Hash == Existing->Hash)
         {
           Result = Existing->GlyphConfig;
 
@@ -27211,6 +27257,7 @@ static kbts_glyph_config *kbts__FindOrCreateGlyphConfig(kbts_shape_context *Cont
       Existing->FeatureOverrides = FeatureOverrides;
       Existing->FeatureOverrideCount = FeatureOverrideCount;
       Existing->GlyphConfig = Result;
+      Existing->Hash = Hash;
     }
   }
 
