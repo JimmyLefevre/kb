@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.28b - text segmentation and shaping
+/*  kb_text_shape - v2.28c - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1560,6 +1560,7 @@
      .                       .                  .                    .
 
    VERSION HISTORY
+     2.28c - Only perform single decomposition on unsupported glyphs.
      2.28b - Make kbts_PlaceBlob not error out when State->ScratchSize is 0 and ScratchMemory is NULL.
              Make kbts_PlaceBlob return KBTS_LOAD_FONT_ERROR_NONE when State->TotalSize is 0 and OutputMemory is 0.
              Remove KBTS_CONTEXT_MAX_FONT_COUNT. The font stack now resizes dynamically in increments of KBTS_CONTEXT_FONTS_PER_BLOCK.
@@ -21357,15 +21358,22 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
                 Decomposition = GlyphToDecompose.Decomposition;
                 DecompositionSize = kbts__GetDecompositionSize(Decomposition);
 
-                // Only decompose when the font supports the decomposed form.
-                KBTS__FOR(DecompositionIndex, 0, DecompositionSize)
+                // Only do single decompositions if the current glyph is not supported.
+                if((DecompositionSize == 2) ||
+                   !GlyphToDecompose.Id)
                 {
-                  kbts_glyph DecompositionGlyph = kbts_CodepointToGlyph(Font, (int)kbts__GetDecompositionCodepoint(Decomposition, DecompositionIndex), 0, 0);
-                  DecompositionGlyph.Config = GlyphToDecompose.Config;
-                  DecompositionGlyph.UserIdOrCodepointIndex = GlyphToDecompose.UserIdOrCodepointIndex;
+                  // Only decompose when the font supports the decomposed form.
+                  KBTS__FOR(DecompositionIndex, 0, DecompositionSize)
+                  {
+                    kbts_glyph DecompositionGlyph = kbts_CodepointToGlyph(Font, (int)kbts__GetDecompositionCodepoint(Decomposition, DecompositionIndex), GlyphToDecompose.Config, GlyphToDecompose.UserIdOrCodepointIndex);
 
-                  AnyUnsupported |= !DecompositionGlyph.Id;
-                  Decomposed[DecompositionIndex] = DecompositionGlyph;
+                    AnyUnsupported |= !DecompositionGlyph.Id;
+                    Decomposed[DecompositionIndex] = DecompositionGlyph;
+                  }
+                }
+                else
+                {
+                  AnyUnsupported = 1;
                 }
               }
 
