@@ -30196,8 +30196,11 @@ static void kbts__BreakAddCodepoint(kbts_break_state *State, kbts_u32 Codepoint,
     if(0)
     {
       LineBreakAbsorbCharacter:;
-      State->LineBreak2PositionOffset -= (kbts_s16)PositionIncrement;
-      State->LineBreak3PositionOffset -= (kbts_s16)PositionIncrement;
+      // The buffered positions lag behind the current codepoint, so we have to step them
+      // by the increments of the codepoints they lag by, not by PositionIncrement.
+      // Increments do not have to be uniform, so these can differ.
+      State->LineBreak2PositionOffset += PositionOffset2;
+      State->LineBreak3PositionOffset += (kbts_s16)(PositionOffset3 - PositionOffset2);
     }
 
     // This always gets updated.
@@ -30473,7 +30476,10 @@ static void kbts__BreakAddCodepoint(kbts_break_state *State, kbts_u32 Codepoint,
   if(KBTS__IN_SET(WordBreakClass, KBTS__SET32((KBTS_WORD_BREAK_CLASS_EX)(KBTS_WORD_BREAK_CLASS_FO)(KBTS_WORD_BREAK_CLASS_ZWJ))) &&
      !KBTS__IN_SET(LastWordBreakClass, KBTS__SET32((KBTS_WORD_BREAK_CLASS_SOT)(KBTS_WORD_BREAK_CLASS_CR)(KBTS_WORD_BREAK_CLASS_LF)(KBTS_WORD_BREAK_CLASS_NL))))
   {
-    WordBreak2PositionOffset -= (kbts_s16)PositionIncrement;
+    // The buffered position lags behind the current codepoint, so we have to step it
+    // by the increment of the codepoint it lags by, not by PositionIncrement.
+    // Increments do not have to be uniform, so these can differ.
+    WordBreak2PositionOffset += PositionOffset2;
     State->WordBreak2PositionOffset = WordBreak2PositionOffset;
   }
   else
