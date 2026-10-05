@@ -25526,7 +25526,7 @@ KBTS_EXPORT kbts_font *kbts_ShapePopFont(kbts_shape_context *Context)
 
   if(!Context->Error && Context->FontCount)
   {
-    kbts__context_font_block *Block = (kbts__context_font_block *)&Context->FontBlockSentinel.Prev;
+    kbts__context_font_block *Block = (kbts__context_font_block *)Context->FontBlockSentinel.Prev;
     kbts_un BlockFontIndex = (Context->FontCount - 1) & (KBTS__CONTEXT_FONTS_PER_BLOCK - 1);
     kbts__context_font *Font = &Block->Fonts[BlockFontIndex];
     Result = Font->Info.Font;
