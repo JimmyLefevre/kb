@@ -403,7 +403,18 @@
 
             If the context allocated the font itself, using kbts_ShapePushFontFromFile or
             kbts_ShapePushFontFromMemory, then the pointer is still returned, but it points to
-            freed memory.
+            freed memory. The shape configs the context cached for that font are forgotten,
+            as with kbts_ShapeForgetFont.
+
+          :kbts_ShapeForgetFont
+          :ShapeForgetFont
+          void kbts_ShapeForgetFont(kbts_shape_context *Context, kbts_font *Font)
+            Drops the shape configs [Context] cached for [Font].
+
+            The context keys its cached shape configs by font address. Call this before
+            freeing a font the context has shaped with, so that a font later loaded at the
+            same address does not match the freed font's configs. The configs' memory stays
+            in the context until it is destroyed.
 
         CONTEXT:SHAPING
           :kbts_ShapeBegin
@@ -4664,6 +4675,7 @@ KBTS_EXPORT kbts_font *kbts_ShapePushFontFromMemory(kbts_shape_context *Context,
 KBTS_EXPORT kbts_font *kbts_ShapePushFont2(kbts_shape_context *Context, kbts_font *Font, kbts_variation *Variations, int VariationCount, kbts_u32 *ContextFontHandle);
 KBTS_EXPORT kbts_font *kbts_ShapePushFont(kbts_shape_context *Context, kbts_font *Font);
 KBTS_EXPORT kbts_font *kbts_ShapePopFont(kbts_shape_context *Context);
+KBTS_EXPORT void kbts_ShapeForgetFont(kbts_shape_context *Context, kbts_font *Font);
 KBTS_EXPORT void kbts_ShapeBegin(kbts_shape_context *Context, kbts_direction ParagraphDirection, kbts_language Language);
 KBTS_EXPORT void kbts_ShapeEnd(kbts_shape_context *Context);
 KBTS_EXPORT int kbts_ShapeRun(kbts_shape_context *Context, kbts_run *Run);
@@ -13796,6 +13808,7 @@ enum kbts__context_font_flags_enum
 {
   KBTS__CONTEXT_FONT_FLAG_NONE = 0,
   KBTS__CONTEXT_FONT_FLAG_VARIATIONS_DIRTY = 1,
+  KBTS__CONTEXT_FONT_FLAG_OWNED = 2, // The context allocated the font, and frees it when it is popped.
 };
 
 typedef struct kbts__interned_context_font_info
@@ -13820,6 +13833,7 @@ typedef struct kbts__existing_shape_config
   kbts_shape_config *Config;
 
   kbts__interned_context_font_info *FontInfo;
+  kbts_font *Font; // Compared, never dereferenced: kbts_ShapeForgetFont drops entries by it.
   kbts_script Script;
   kbts_language Language;
 } kbts__existing_shape_config;
@@ -25520,6 +25534,24 @@ KBTS_EXPORT kbts_font *kbts_ShapePushFont(kbts_shape_context *Context, kbts_font
   return Font;
 }
 
+KBTS_EXPORT void kbts_ShapeForgetFont(kbts_shape_context *Context, kbts_font *Font)
+{
+  for(kbts__existing_shape_config_block *Block = (kbts__existing_shape_config_block *)Context->ExistingShapeConfigBlockSentinel.Next;
+      kbts__ExistingShapeConfigBlockIsValid(Context, Block);
+      Block = (kbts__existing_shape_config_block *)Block->Header.Next)
+  {
+    kbts_u32 KeptCount = 0;
+    KBTS__FOR(ExistingIndex, 0, Block->Count)
+    {
+      if(Block->Items[ExistingIndex].Font != Font)
+      {
+        Block->Items[KeptCount++] = Block->Items[ExistingIndex];
+      }
+    }
+    Block->Count = KeptCount;
+  }
+}
+
 KBTS_EXPORT kbts_font *kbts_ShapePopFont(kbts_shape_context *Context)
 {
   kbts_font *Result = 0;
@@ -25530,6 +25562,11 @@ KBTS_EXPORT kbts_font *kbts_ShapePopFont(kbts_shape_context *Context)
     kbts_un BlockFontIndex = (Context->FontCount - 1) & (KBTS__CONTEXT_FONTS_PER_BLOCK - 1);
     kbts__context_font *Font = &Block->Fonts[BlockFontIndex];
     Result = Font->Info.Font;
+
+    if(Font->Info.Flags & KBTS__CONTEXT_FONT_FLAG_OWNED)
+    {
+      kbts_ShapeForgetFont(Context, Result);
+    }
 
     if(!BlockFontIndex)
     {
@@ -25562,6 +25599,7 @@ KBTS_EXPORT kbts_font *kbts_ShapePushFontFromFile2(kbts_shape_context *Context, 
       if(!Result->Error)
       {
         kbts__InitializeContextFont(Context, ContextFont, Result);
+        ContextFont->Info.Flags |= KBTS__CONTEXT_FONT_FLAG_OWNED;
 
         kbts__ShapeSetFontVariations(Context, ContextFontHandle, Variations, VariationCount, KBTS__SHAPE_SET_FONT_VARIATIONS_FLAG_SET_TO_DEFAULT_IF_NOT_EXPLICITLY_SET);
       }
@@ -25621,6 +25659,7 @@ KBTS_EXPORT kbts_font *kbts_ShapePushFontFromMemory2(kbts_shape_context *Context
         if(!Error)
         {
           kbts__InitializeContextFont(Context, ContextFont, Result);
+          ContextFont->Info.Flags |= KBTS__CONTEXT_FONT_FLAG_OWNED;
 
           kbts__ShapeSetFontVariations(Context, ContextFontHandle, Variations, VariationCount, KBTS__SHAPE_SET_FONT_VARIATIONS_FLAG_SET_TO_DEFAULT_IF_NOT_EXPLICITLY_SET);
         }
@@ -27189,6 +27228,7 @@ static kbts_shape_config *kbts__FindOrCreateShapeConfig(kbts_shape_context *Cont
     kbts__existing_shape_config *NewExisting = &Last->Items[Last->Count++];
     NewExisting->Config = Result;
     NewExisting->FontInfo = FontInfo;
+    NewExisting->Font = FontInfo->Font;
     NewExisting->Script = Script;
     NewExisting->Language = Language;
   }
