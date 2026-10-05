@@ -26508,7 +26508,7 @@ KBTS_EXPORT void kbts_ShapeCodepointWithUserId(kbts_shape_context *Context, int 
           Context->Error = KBTS_SHAPE_ERROR_OUT_OF_MEMORY;
           return;
         }
-        KBTS_MEMCPY(Hoisted, Context->ScratchFeatureOverrides, sizeof(*Hoisted) * UniqueFeatureOverrideCount);
+        KBTS_MEMCPY(Hoisted, UniqueFeatureOverrides, sizeof(*Hoisted) * UniqueFeatureOverrideCount);
         
         Context->CurrentFeatureOverrides = Hoisted;
         NewFeatureOverrideCount = UniqueFeatureOverrideCount;
