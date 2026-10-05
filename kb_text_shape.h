@@ -13677,6 +13677,10 @@ struct kbts_glyph_config
 
   kbts_u32 *EnabledLookupBits;
   kbts_u32 *DisabledLookupBits;
+  // Lookups a feature override turned on. A lookup baked for a glyph-filtered
+  // feature (frac, numr, dnom, the joining forms) applies to every glyph here,
+  // not only to the glyphs the shaper flagged for that feature.
+  kbts_u32 *UnfilteredLookupBits;
 
   kbts__enabled_lookup *NonBinaryEnabledLookups;
   kbts_u32 NonBinaryEnabledLookupCount;
@@ -22040,6 +22044,7 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
 
       kbts_u32 FilterMask = Config->Shaper == KBTS_SHAPER_USE ? KBTS__USE_GLYPH_FEATURE_MASK : KBTS__GLYPH_FEATURE_MASK;
 
+      kbts_un SequentialLookupCount = kbts__SequentialLookupCount(Config);
       kbts_un FeatureStageIndex = kbts__CurrentBakedFeatureStageIndex(Scratchpad);
       kbts_un FirstSequentialLookupIndex = Config->FeatureStageFirstLookupIndices[FeatureStageIndex];
       kbts_un OnePastLastSequentialLookupIndex = Config->FeatureStageFirstLookupIndices[FeatureStageIndex + 1];
@@ -22049,6 +22054,7 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
         kbts_un LookupIndex = SequentialLookup->LookupIndex;
         kbts_u32 SkipFlags = SequentialLookup->SkipFlags;
         kbts_u32 GlyphFilter = SequentialLookup->GlyphFilter;
+        kbts__matrix_index UnfilteredMatrixIndex = kbts__IdSequentialLookupMatrixIndex(SequentialLookupIndex, 0, SequentialLookupCount);
 
         kbts__bucketed_glyph_block_header *Sentinel = &Scratchpad->LookupGlyphBuckets[SequentialLookupIndex];
 
@@ -22087,6 +22093,12 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
 
                 kbts__BeginLookupApplication(Scratchpad, Glyph);
                 kbts_u32 EffectiveGlyphFilter = GlyphFilter & FilterMask;
+
+                if(EffectiveGlyphFilter && Glyph->Config &&
+                   (Glyph->Config->UnfilteredLookupBits[UnfilteredMatrixIndex.WordIndex] & (1u << UnfilteredMatrixIndex.BitIndex)))
+                {
+                  EffectiveGlyphFilter = 0;
+                }
 
                 if((GlyphFlags & EffectiveGlyphFilter) == EffectiveGlyphFilter)
                 {
@@ -25779,7 +25791,7 @@ KBTS_EXPORT int kbts_SizeOfGlyphConfig(kbts_shape_config *ShapeConfig, kbts_feat
 
   kbts_un Result = sizeof(kbts_glyph_config) +
                    NonBinaryOverrideCount * sizeof(kbts__enabled_lookup) +
-                   MatrixRowSizeInBytes * 2;
+                   MatrixRowSizeInBytes * 3;
   return (int)Result;
 }
 
@@ -25818,6 +25830,8 @@ KBTS_EXPORT kbts_glyph_config *kbts_PlaceGlyphConfig(kbts_shape_config *ShapeCon
     KBTS_MEMSET(EnabledLookupBits, 0, MatrixRowSizeInBytes);
     kbts_u32 *DisabledLookupBits = (kbts_u32 *)kbts__PointerPush(&Bump, MatrixRowSizeInBytes, KBTS_ALIGNOF(kbts_u32));
     KBTS_MEMSET(DisabledLookupBits, 0, MatrixRowSizeInBytes);
+    kbts_u32 *UnfilteredLookupBits = (kbts_u32 *)kbts__PointerPush(&Bump, MatrixRowSizeInBytes, KBTS_ALIGNOF(kbts_u32));
+    KBTS_MEMSET(UnfilteredLookupBits, 0, MatrixRowSizeInBytes);
 
     kbts__enabled_lookup NonBinaryEnabledLookups[KBTS_MAX_SIMULTANEOUS_FEATURES];
     kbts_un NonBinaryEnabledLookupCount = 0;
@@ -25896,6 +25910,7 @@ KBTS_EXPORT kbts_glyph_config *kbts_PlaceGlyphConfig(kbts_shape_config *ShapeCon
               if(FoundOverride->Value)
               {
                 EnabledLookupBits[SequentialMatrixIndex.WordIndex] |= 1u << SequentialMatrixIndex.BitIndex;
+                UnfilteredLookupBits[SequentialMatrixIndex.WordIndex] |= 1u << SequentialMatrixIndex.BitIndex;
 
                 if((FoundOverride->Value > 1) &&
                    (NonBinaryEnabledLookupCount < KBTS_MAX_SIMULTANEOUS_FEATURES))
@@ -25926,6 +25941,7 @@ KBTS_EXPORT kbts_glyph_config *kbts_PlaceGlyphConfig(kbts_shape_config *ShapeCon
     Result->NonBinaryEnabledLookupCount = (kbts_u32)NonBinaryEnabledLookupCount;
     Result->EnabledLookupBits = EnabledLookupBits;
     Result->DisabledLookupBits = DisabledLookupBits;
+    Result->UnfilteredLookupBits = UnfilteredLookupBits;
   }
 
   return Result;
