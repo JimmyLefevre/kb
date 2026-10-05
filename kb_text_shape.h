@@ -27722,11 +27722,13 @@ KBTS_EXPORT kbts_load_font_error kbts_LoadFont(kbts_font *Font, kbts_load_font_s
             kbts_u16 FeatureListOffset = kbts__ByteSwap16(kbts__ReadU16Unaligned(&GsubGpos->FeatureListOffset));
             kbts_u16 LookupListOffset = kbts__ByteSwap16(kbts__ReadU16Unaligned(&GsubGpos->LookupListOffset));
 
-            if(!ScriptListOffset &&
-               !FeatureListOffset &&
+            if(!ScriptListOffset ||
+               !FeatureListOffset ||
                !LookupListOffset)
             {
               // Apparently, this is a valid way of specifying an empty table.
+              // A table missing any one of its lists can apply nothing either,
+              // and following a NULL offset would read the header as that list.
               kbts_blob_table_id TableId = GsubGposTableIds[GsubGposTableIndex];
 
               KBTS__ZERO_TYPE(&State->Tables[TableId]);
