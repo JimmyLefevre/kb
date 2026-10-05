@@ -24416,7 +24416,10 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
           kbts_u32 MatchMask = Indic3 ? 0xFFFFFF : 0xFFFFFFFF;
           kbts_b32 Default = (Tag == KBTS_FOURCC('D', 'F', 'L', 'T')) | (Tag == KBTS_FOURCC('d', 'f', 'l', 't'));
           kbts_b32 PerfectMatch = !((Tag ^ DesiredTag) & MatchMask);
-          if(!ScriptIndex || PerfectMatch || Default || (Tag == LatinFallbackTag))
+          // The requested script, else DFLT, else latn. A font with none of these
+          // has no language system for this script: another script's features are
+          // not an answer.
+          if(PerfectMatch || Default || (Tag == LatinFallbackTag))
           {
             kbts__langsys *Langsys = kbts__GetDefaultLangsys(ThisScript.Script);
             KBTS__FOR(LangsysIndex, 0, ThisScript.Script->Count)
