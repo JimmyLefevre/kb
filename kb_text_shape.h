@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.28f - text segmentation and shaping
+/*  kb_text_shape - v2.28g - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1560,7 +1560,8 @@
      .                       .                  .                    .
 
    VERSION HISTORY
-     2.29f - Removed many UB unaligned memory accesses.
+     2.28g - Fix GCC 15.2 warnings. Fix typo in version history.
+     2.28f - Removed many UB unaligned memory accesses.
      2.28e - Fix word and line break positions with heterogenous-sized strings.
      2.28d - Better cache keys in the context.
              Fix an infinite loop in non-cluster Myanmar syllable splitting.
@@ -17469,7 +17470,7 @@ static void kbts__ByteSwapGsubLookupSubtable(kbts__byteswap_context *Context, kb
   while(Swap && (LookupType == 7))
   {
     kbts__extension *Subst = (kbts__extension *)Base;
-    kbts_u16 Subst_Format = kbts__ByteSwap16InPlace(&Subst->Format);
+    kbts__ByteSwap16InPlace(&Subst->Format);
     kbts_u16 Subst_LookupType = kbts__ByteSwap16InPlace(&Subst->LookupType);
     kbts_u32 Subst_Offset = kbts__ByteSwap32InPlace(&Subst->Offset);
 
@@ -17778,7 +17779,7 @@ static void kbts__ByteSwapGposLookupSubtable(kbts__byteswap_context *Context, kb
             {
               kbts__pair_value_record *PairRecord = (kbts__pair_value_record *)(At + RecordIndex * PairRecordSize);
 
-              kbts_u16 PairRecord_SecondGlyph = kbts__ByteSwap16InPlace(&PairRecord->SecondGlyph);
+              kbts__ByteSwap16InPlace(&PairRecord->SecondGlyph);
               kbts_u16 *Record = KBTS__POINTER_AFTER(kbts_u16, PairRecord);
 
               kbts__unpacked_value_record Unpacked1 = kbts__ByteSwapValueRecord(Context, Set, Adjust_ValueFormat1, Record);
@@ -21352,10 +21353,6 @@ static void kbts__LoadParents(kbts_glyph *Glyph, kbts_glyph_parent *Parents, kbt
     kbts_u64 Decomposition = kbts__GetUnicodeDecomposition(Parent.Codepoint);
     Parent.Codepoint1 = kbts__GetDecompositionCodepoint(Decomposition, 1);
 
-    kbts_un DecompositionSize = kbts__GetDecompositionSize(Decomposition);
-
-    KBTS_ASSERT(DecompositionSize == 2);
-
     Parents[DoubleDecompositionCount++] = Parent;
   }
 
@@ -24645,7 +24642,7 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Sc
     }
     
     Config.IndicScriptProperties = kbts__IndicScriptProperties(Script);
-    Config.Shaper = FoundScriptIsIndic3 ? KBTS_SHAPER_USE : ScriptProperties->Shaper;
+    Config.Shaper = FoundScriptIsIndic3 ? (kbts_shaper)KBTS_SHAPER_USE : ScriptProperties->Shaper;
     Config.OpList = *kbts__ShaperOpLists[Config.Shaper];
 
     KBTS_MEMSET(&Config.Features, 0, sizeof(Config.Features));
@@ -25567,7 +25564,6 @@ KBTS_EXPORT float kbts_FontMetric(kbts_font *Font, kbts_u32 Tag, float *Variatio
         {
           kbts__item_variation_store *Store = KBTS__POINTER_OFFSET(kbts__item_variation_store, Mvar, kbts__ReadU16Unaligned(&Mvar->ItemVariationStoreOffset));
           kbts_u32 *Store_VariationRegionListOffset = kbts__item_variation_store_VariationRegionListOffset(Store);
-          kbts_u16 *Store_ItemVariationDataCount = kbts__item_variation_store_ItemVariationDataCount(Store);
 
           kbts__variation_region_list *VariationRegionList = KBTS__POINTER_OFFSET(kbts__variation_region_list, Store, kbts__ReadU32Unaligned(Store_VariationRegionListOffset));
           // @Hardcoded
@@ -25733,7 +25729,7 @@ KBTS_EXPORT kbts_font *kbts_ShapePushFont2(kbts_shape_context *Context, kbts_fon
 KBTS_EXPORT kbts_font *kbts_ShapePushFont(kbts_shape_context *Context, kbts_font *Font)
 {
   kbts_font *Result = kbts_ShapePushFont2(Context, Font, 0, 0, 0);
-  return Font;
+  return Result;
 }
 
 KBTS_EXPORT kbts_font *kbts_ShapePopFont(kbts_shape_context *Context)
@@ -28696,7 +28692,7 @@ KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_
         kbts_un HeaderSize = HeaderSizes[TableIdIndex];
 
         char *TableEnd;
-        kbts__hvar_vvar_common *HvarVvar = (kbts__hvar_vvar_common *)kbts__BlobTableHeaderChecked_(Header, TableId, HeaderSizes[TableIdIndex], &TableEnd, &Result);
+        kbts__hvar_vvar_common *HvarVvar = (kbts__hvar_vvar_common *)kbts__BlobTableHeaderChecked_(Header, TableId, HeaderSize, &TableEnd, &Result);
 
         if(HvarVvar)
         {
