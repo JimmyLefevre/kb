@@ -24469,18 +24469,6 @@ static kbts_u32 kbts__MurmurFinalize(kbts__murmur_state *State)
   return (kbts_u32)Result;
 }
 
-static void kbts__ShapeConfigUid(kbts_shape_config *Config, kbts_uid *Uid)
-{
-  if(Config)
-  {
-    KBTS_MEMCPY(Uid, &Config->Uid, sizeof(*Uid));
-  }
-  else
-  {
-    KBTS_MEMSET(Uid, 0, sizeof(*Uid));
-  }
-}
-
 static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_script Script, kbts_language Language, float *VariationVector, void *Memory, kbts_un *Size, kbts_uid *Uid)
 {
   kbts_shape_config *Result = 0;
@@ -25100,6 +25088,18 @@ KBTS_EXPORT kbts_shape_config *kbts_CreateShapeConfig2(kbts_font *Font, kbts_scr
 KBTS_EXPORT kbts_shape_config *kbts_CreateShapeConfig(kbts_font *Font, kbts_script Script, kbts_language Language, kbts_allocator_function *Allocator, void *AllocatorData)
 {
   return kbts_CreateShapeConfig2(Font, Script, Language, 0, Allocator, AllocatorData, 0);
+}
+
+KBTS_EXPORT void kbts_ShapeConfigUid(kbts_shape_config *Config, kbts_uid *Uid)
+{
+  if(Config)
+  {
+    KBTS_MEMCPY(Uid, &Config->Uid, sizeof(*Uid));
+  }
+  else
+  {
+    KBTS_MEMSET(Uid, 0, sizeof(*Uid));
+  }
 }
 
 KBTS_EXPORT void kbts_DestroyShapeConfig(kbts_shape_config *Config)
