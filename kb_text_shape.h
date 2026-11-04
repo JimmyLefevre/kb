@@ -21453,7 +21453,7 @@ static kbts__substitution_result_flags kbts__DoSubstitution(kbts_shape_scratchpa
             Frame->SubtableIndex = 0xFFFE;
 
             // From the Microsoft docs:
-            // To move to the “next” glyph, the client skips all the glyphs that participated in the lookup operation:
+            // To move to the "next" glyph, the client skips all the glyphs that participated in the lookup operation:
             // glyphs that were substituted/positioned as well as any other glyphs in the matched input sequence.
           }
         }
