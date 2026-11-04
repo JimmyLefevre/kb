@@ -13824,7 +13824,8 @@ typedef struct kbts__existing_shape_config
 {
   kbts_shape_config *Config;
 
-  kbts__interned_context_font_info *FontInfo;
+  kbts_font *Font;
+  kbts_u32 FontHash;
   kbts_script Script;
   kbts_language Language;
 } kbts__existing_shape_config;
@@ -27734,7 +27735,8 @@ static kbts_shape_config *kbts__FindOrCreateShapeConfig(kbts_shape_context *Cont
     {
       kbts__existing_shape_config *Existing = &ExistingBlock->Items[ExistingIndex];
 
-      if((Existing->FontInfo->Hash == FontInfo->Hash) &&
+      if((Existing->FontHash == FontInfo->Hash) &&
+         (Existing->Font == FontInfo->Font) &&
          (Existing->Script == Script) &&
          (Existing->Language == Language))
       {
@@ -27770,7 +27772,8 @@ static kbts_shape_config *kbts__FindOrCreateShapeConfig(kbts_shape_context *Cont
     KBTS_ASSERT(Last->Count < KBTS__EXISTING_SHAPE_CONFIGS_PER_BLOCK);
     kbts__existing_shape_config *NewExisting = &Last->Items[Last->Count++];
     NewExisting->Config = Result;
-    NewExisting->FontInfo = FontInfo;
+    NewExisting->Font = FontInfo->Font;
+    NewExisting->FontHash = FontInfo->Hash;
     NewExisting->Script = Script;
     NewExisting->Language = Language;
   }
