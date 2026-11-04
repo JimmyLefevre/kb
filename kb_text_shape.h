@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.30 - text segmentation and shaping
+/*  kb_text_shape - v2.30a - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1560,6 +1560,7 @@
      .                       .                  .                    .
 
    VERSION HISTORY
+     2.30a - Fix a case where resolving bracket scripts would collapse entire strings to the wrong script.
      2.30  - Store font hashes in cache entries rather than indirectly. (Thanks Wassim Alhajomar and github:pdoane)
              Accept GSUB and GPOS tables with null ScriptListOffset, FeatureListOffset or LookupListOffset as empty tables. (Thanks github:pdoane)
              Remove two non-ASCII characters from a comment. (Thanks github:akien-mga)
@@ -3112,6 +3113,7 @@ enum kbts_shape_error_enum
   KBTS_SHAPE_ERROR_INVALID_FONT,
   KBTS_SHAPE_ERROR_GAVE_TEXT_BEFORE_CALLING_BEGIN,
   KBTS_SHAPE_ERROR_OUT_OF_MEMORY,
+  // KBTS_SHAPE_ERROR_GENERATED_TOO_MANY_GLYPHS,
 
   KBTS_SHAPE_ERROR_COUNT,
 };
@@ -13758,6 +13760,7 @@ typedef struct kbts__bucketed_glyph_block
 
 #define KBTS__MAX_VARIATION_AXIS_COUNT 32
 #define KBTS_MAX_SIMULTANEOUS_FEATURES 256
+// #define KBTS_MAX_OUTPUT_GLYPHS_PER_INPUT_GLYPH 256
 typedef struct kbts__item_variation_store kbts__item_variation_store;
 struct kbts_shape_scratchpad
 {
@@ -13768,6 +13771,9 @@ struct kbts_shape_scratchpad
   void *ScratchMemory;
 
   kbts_shape_config *Config;
+
+  kbts_u32 ApproximateInputGlyphCount;
+  kbts_u32 ApproximateOutputGlyphCount;
 
   kbts_u32 *GlyphLookupSubtableMatrix;
   kbts_u32 *LookupSubtableIndexOffsets;
@@ -21295,6 +21301,7 @@ static kbts__substitution_result_flags kbts__DoSubstitution(kbts_shape_scratchpa
                   }
 
                   OnePastLastGlyph = LastInsert->Next;
+                  Scratchpad->ApproximateOutputGlyphCount += GrowCount;
                 }
                 else
                 {
@@ -21488,6 +21495,8 @@ static kbts__substitution_result_flags kbts__DoSubstitution(kbts_shape_scratchpa
                           OtherFrame->StartIndex += (kbts_u16)GrowCount;
                         }
                       }
+
+                      Scratchpad->ApproximateOutputGlyphCount += (kbts_u32)GrowCount;
                     }
 
                     // Currently, we only take the main glyph's config into account while making the ligature's config.
@@ -21934,9 +21943,12 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
       { // Full NFD decomposition
         kbts_glyph *DecompositionGlyphs = (kbts_glyph *)Scratchpad->ScratchMemory;
         kbts_un CodepointsToDecomposeCount = 0;
+        kbts_un InputGlyphCount = 0;
 
         KBTS__FOR_GLYPH(Storage, Glyph)
         {
+          InputGlyphCount += 1;
+
           if(kbts__GetDecompositionSize(Glyph->Decomposition))
           {
             kbts_glyph *PrevAnchor = Glyph->Prev;
@@ -22012,6 +22024,9 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
             Glyph = PrevAnchor;
           }
         }
+
+        Scratchpad->ApproximateInputGlyphCount = (kbts_u32)InputGlyphCount;
+        Scratchpad->ApproximateOutputGlyphCount = (kbts_u32)InputGlyphCount;
       }
       KBTS_INSTRUMENT_BLOCK_END(Decompose);
 
@@ -22705,6 +22720,12 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
                     // These flags are used by USE.
                     kbts_u32 GeneratedGlyphFlags = GlyphFilter & (KBTS_GLYPH_FLAG_RPHF | KBTS_GLYPH_FLAG_PREF);
                     kbts__DoSubstitution(Scratchpad, Config, Storage, LookupList, SequentialLookupIndex, FeatureValue, Frames, &FrameCount, 0, SkipFlags, GeneratedGlyphFlags);
+
+                    // if((Scratchpad->ApproximateOutputGlyphCount / Scratchpad->ApproximateInputGlyphCount) >= KBTS_MAX_OUTPUT_GLYPHS_PER_INPUT_GLYPH)
+                    // {
+                    //   Scratchpad->Error = KBTS_SHAPE_ERROR_GENERATED_TOO_MANY_GLYPHS;
+                    //   return;
+                    // }
                   }
                 }
 
@@ -27461,6 +27482,20 @@ static void kbts__ShapeDirect(kbts_shape_scratchpad *Scratchpad, kbts_glyph_stor
       }
     }
 
+    if(Scratchpad->Config &&
+       (Scratchpad->Config->Shaper == KBTS_SHAPER_TIBETAN))
+    {
+      // Tibetan doesn't go through the normal NORMALIZE path, so we have to set ApproximateInputGlyphCount here.
+      kbts_un InputGlyphCount = 0;
+
+      KBTS__FOR_GLYPH(Storage, Glyph)
+      {
+        InputGlyphCount += 1;
+      }
+
+      Scratchpad->ApproximateInputGlyphCount = Scratchpad->ApproximateOutputGlyphCount = (kbts_u32)InputGlyphCount;
+    }
+
     KBTS_INSTRUMENT_BLOCK_BEGIN(ReadOpLoop0);
 
     // For simple shapers, all of the shaping happens in this single loop.
@@ -30786,11 +30821,6 @@ static void kbts__BreakAddCodepoint(kbts_break_state *State, kbts_u32 Codepoint,
       // we have to wait until DoBreak() to resolve these.
       Bracket->Direction = KBTS_DIRECTION_DONT_KNOW;
       Bracket->Script = KBTS_SCRIPT_DONT_KNOW;
-
-      if(ScriptCount)
-      {
-        Bracket->Script = ScriptSet[0];
-      }
 
       State->Flags |= KBTS_BREAK_STATE_FLAG_LAST_WAS_BRACKET;
     }
