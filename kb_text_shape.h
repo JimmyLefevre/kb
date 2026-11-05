@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.30a - text segmentation and shaping
+/*  kb_text_shape - v2.31 - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1560,6 +1560,9 @@
      .                       .                  .                    .
 
    VERSION HISTORY
+     2.31  - Added a limit to the number of output glyphs that can be generated per input glyph. 256 by default, see KBTS_MAX_OUTPUT_GLYPHS_PER_INPUT_GLYPH. (Thanks github:dimenus)
+               New enum member: KBTS_SHAPE_ERROR_GENERATED_TOO_MANY_GLYPHS.
+             Fix manual overrides of automatic features (like frac, numr, dnom, ljmo, isol etc.) not working. (Thanks github:pdoane)
      2.30a - Fix a case where resolving bracket scripts would collapse entire strings to the wrong script.
      2.30  - Store font hashes in cache entries rather than indirectly. (Thanks Wassim Alhajomar and github:pdoane)
              Accept GSUB and GPOS tables with null ScriptListOffset, FeatureListOffset or LookupListOffset as empty tables. (Thanks github:pdoane)
@@ -3113,7 +3116,7 @@ enum kbts_shape_error_enum
   KBTS_SHAPE_ERROR_INVALID_FONT,
   KBTS_SHAPE_ERROR_GAVE_TEXT_BEFORE_CALLING_BEGIN,
   KBTS_SHAPE_ERROR_OUT_OF_MEMORY,
-  // KBTS_SHAPE_ERROR_GENERATED_TOO_MANY_GLYPHS,
+  KBTS_SHAPE_ERROR_GENERATED_TOO_MANY_GLYPHS,
 
   KBTS_SHAPE_ERROR_COUNT,
 };
@@ -13697,6 +13700,9 @@ struct kbts_glyph_config
   kbts_u32 *EnabledLookupBits;
   kbts_u32 *DisabledLookupBits;
 
+  kbts_glyph_flags EnabledFilterFlags;
+  kbts_glyph_flags DisabledFilterFlags;
+
   kbts__enabled_lookup *NonBinaryEnabledLookups;
   kbts_u32 NonBinaryEnabledLookupCount;
 };
@@ -13760,7 +13766,7 @@ typedef struct kbts__bucketed_glyph_block
 
 #define KBTS__MAX_VARIATION_AXIS_COUNT 32
 #define KBTS_MAX_SIMULTANEOUS_FEATURES 256
-// #define KBTS_MAX_OUTPUT_GLYPHS_PER_INPUT_GLYPH 256
+#define KBTS_MAX_OUTPUT_GLYPHS_PER_INPUT_GLYPH 256
 typedef struct kbts__item_variation_store kbts__item_variation_store;
 struct kbts_shape_scratchpad
 {
@@ -21301,7 +21307,7 @@ static kbts__substitution_result_flags kbts__DoSubstitution(kbts_shape_scratchpa
                   }
 
                   OnePastLastGlyph = LastInsert->Next;
-                  Scratchpad->ApproximateOutputGlyphCount += GrowCount;
+                  Scratchpad->ApproximateOutputGlyphCount += (kbts_u32)GrowCount;
                 }
                 else
                 {
@@ -22703,6 +22709,12 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
                 kbts_u32 GlyphFlags = Glyph->Flags;
                 kbts_glyph *Prev = Glyph->Prev;
 
+                if(Glyph->Config)
+                {
+                  GlyphFlags |= Glyph->Config->EnabledFilterFlags;
+                  GlyphFlags &= ~Glyph->Config->DisabledFilterFlags;
+                }
+
                 kbts__BeginLookupApplication(Scratchpad, Glyph);
                 kbts_u32 EffectiveGlyphFilter = GlyphFilter & FilterMask;
 
@@ -22721,11 +22733,11 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
                     kbts_u32 GeneratedGlyphFlags = GlyphFilter & (KBTS_GLYPH_FLAG_RPHF | KBTS_GLYPH_FLAG_PREF);
                     kbts__DoSubstitution(Scratchpad, Config, Storage, LookupList, SequentialLookupIndex, FeatureValue, Frames, &FrameCount, 0, SkipFlags, GeneratedGlyphFlags);
 
-                    // if((Scratchpad->ApproximateOutputGlyphCount / Scratchpad->ApproximateInputGlyphCount) >= KBTS_MAX_OUTPUT_GLYPHS_PER_INPUT_GLYPH)
-                    // {
-                    //   Scratchpad->Error = KBTS_SHAPE_ERROR_GENERATED_TOO_MANY_GLYPHS;
-                    //   return;
-                    // }
+                    if((Scratchpad->ApproximateOutputGlyphCount / Scratchpad->ApproximateInputGlyphCount) >= KBTS_MAX_OUTPUT_GLYPHS_PER_INPUT_GLYPH)
+                    {
+                      Scratchpad->Error = KBTS_SHAPE_ERROR_GENERATED_TOO_MANY_GLYPHS;
+                      return;
+                    }
                   }
                 }
 
@@ -26499,6 +26511,9 @@ KBTS_EXPORT kbts_glyph_config *kbts_PlaceGlyphConfig(kbts_shape_config *ShapeCon
     kbts_u32 *DisabledLookupBits = (kbts_u32 *)kbts__PointerPush(&Bump, MatrixRowSizeInBytes, KBTS_ALIGNOF(kbts_u32));
     KBTS_MEMSET(DisabledLookupBits, 0, MatrixRowSizeInBytes);
 
+    kbts_glyph_flags EnabledFilterFlags = 0;
+    kbts_glyph_flags DisabledFilterFlags = 0;
+
     kbts__enabled_lookup NonBinaryEnabledLookups[KBTS_MAX_SIMULTANEOUS_FEATURES];
     kbts_un NonBinaryEnabledLookupCount = 0;
 
@@ -26507,6 +26522,32 @@ KBTS_EXPORT kbts_glyph_config *kbts_PlaceGlyphConfig(kbts_shape_config *ShapeCon
     {
       kbts_feature_override *Override = &Overrides[OverrideIndex];
       kbts__AddFeature(&OverriddenFeatures, kbts__FeatureTagToId(Override->Tag));
+
+      kbts_glyph_flags *Flags = Override->Value ? &EnabledFilterFlags : &DisabledFilterFlags;
+
+      switch(Override->Tag)
+      {
+      case KBTS_FEATURE_TAG_isol: *Flags |= KBTS_GLYPH_FLAG_ISOL; break;
+      case KBTS_FEATURE_TAG_fina: *Flags |= KBTS_GLYPH_FLAG_FINA; break;
+      case KBTS_FEATURE_TAG_fin2: *Flags |= KBTS_GLYPH_FLAG_FIN2; break;
+      case KBTS_FEATURE_TAG_fin3: *Flags |= KBTS_GLYPH_FLAG_FIN3; break;
+      case KBTS_FEATURE_TAG_medi: *Flags |= KBTS_GLYPH_FLAG_MEDI; break;
+      case KBTS_FEATURE_TAG_med2: *Flags |= KBTS_GLYPH_FLAG_MED2; break;
+      case KBTS_FEATURE_TAG_init: *Flags |= KBTS_GLYPH_FLAG_INIT; break;
+      case KBTS_FEATURE_TAG_ljmo: *Flags |= KBTS_GLYPH_FLAG_LJMO; break;
+      case KBTS_FEATURE_TAG_vjmo: *Flags |= KBTS_GLYPH_FLAG_VJMO; break;
+      case KBTS_FEATURE_TAG_tjmo: *Flags |= KBTS_GLYPH_FLAG_TJMO; break;
+      case KBTS_FEATURE_TAG_rphf: *Flags |= KBTS_GLYPH_FLAG_RPHF; break;
+      case KBTS_FEATURE_TAG_blwf: *Flags |= KBTS_GLYPH_FLAG_BLWF; break;
+      case KBTS_FEATURE_TAG_half: *Flags |= KBTS_GLYPH_FLAG_HALF; break;
+      case KBTS_FEATURE_TAG_pstf: *Flags |= KBTS_GLYPH_FLAG_PSTF; break;
+      case KBTS_FEATURE_TAG_abvf: *Flags |= KBTS_GLYPH_FLAG_ABVF; break;
+      case KBTS_FEATURE_TAG_pref: *Flags |= KBTS_GLYPH_FLAG_PREF; break;
+      case KBTS_FEATURE_TAG_numr: *Flags |= KBTS_GLYPH_FLAG_NUMR; break;
+      case KBTS_FEATURE_TAG_frac: *Flags |= KBTS_GLYPH_FLAG_FRAC; break;
+      case KBTS_FEATURE_TAG_dnom: *Flags |= KBTS_GLYPH_FLAG_DNOM; break;
+      case KBTS_FEATURE_TAG_cfar: *Flags |= KBTS_GLYPH_FLAG_CFAR; break;
+      }
     }
 
     KBTS__FOR(ShapingTable, 0, KBTS_SHAPING_TABLE_COUNT)
@@ -26609,6 +26650,8 @@ KBTS_EXPORT kbts_glyph_config *kbts_PlaceGlyphConfig(kbts_shape_config *ShapeCon
     Result->NonBinaryEnabledLookupCount = (kbts_u32)NonBinaryEnabledLookupCount;
     Result->EnabledLookupBits = EnabledLookupBits;
     Result->DisabledLookupBits = DisabledLookupBits;
+    Result->EnabledFilterFlags = EnabledFilterFlags;
+    Result->DisabledFilterFlags = DisabledFilterFlags;
   }
 
   return Result;
